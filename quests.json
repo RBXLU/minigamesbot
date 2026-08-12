@@ -1,0 +1,92 @@
+{
+  "daily": [
+    {
+      "id": "play_games",
+      "title": "Сыграй 5 игр",
+      "description": "Сыграй в 5 играх за день",
+      "reward": {"coins": 50, "xp": 10},
+      "target": 5,
+      "type": "count_games"
+    },
+    {
+      "id": "win_games",
+      "title": "Выиграй 3 игры",
+      "description": "Выиграй 3 игры за день",
+      "reward": {"coins": 100, "xp": 20},
+      "target": 3,
+      "type": "count_wins"
+    },
+    {
+      "id": "play_blackjack",
+      "title": "Сыграй в Блэкджек",
+      "description": "Сыграй хотя бы одну игру в Блэкджек",
+      "reward": {"coins": 25, "xp": 5},
+      "target": 1,
+      "type": "play_specific_game",
+      "game": "blackjack"
+    },
+    {
+      "id": "play_room_game",
+      "title": "Сыграй комнатную игру",
+      "description": "Запусти любую игру в комнате",
+      "reward": {"coins": 40, "xp": 10},
+      "target": 1,
+      "type": "play_room_game"
+    },
+    {
+      "id": "play_2048",
+      "title": "Сыграй в 2048",
+      "description": "Сделай хотя бы одну партию в 2048",
+      "reward": {"coins": 35, "xp": 8},
+      "target": 1,
+      "type": "play_specific_game",
+      "game": "g2048"
+    }
+  ],
+  "weekly": [
+    {
+      "id": "play_10_games",
+      "title": "Сыграй 10 игр",
+      "description": "Сыграй в 10 играх за неделю",
+      "reward": {"coins": 200, "xp": 50},
+      "target": 10,
+      "type": "count_games_weekly"
+    },
+    {
+      "id": "win_10_games",
+      "title": "Выиграй 10 игр",
+      "description": "Набери 10 побед за неделю",
+      "reward": {"coins": 350, "xp": 90},
+      "target": 10,
+      "type": "count_wins"
+    },
+    {
+      "id": "win_blackjack_3",
+      "title": "Три победы в Блэкджек",
+      "description": "Выиграй 3 партии в Блэкджек за неделю",
+      "reward": {"coins": 180, "xp": 40},
+      "target": 3,
+      "type": "win_specific_game",
+      "game": "blackjack"
+    }
+  ],
+  "seasonal": [
+    {
+      "id": "season_play_50",
+      "title": "Сезонный марафон",
+      "description": "Сыграй 50 игр за сезон",
+      "reward": {"coins": 1000, "xp": 250},
+      "target": 50,
+      "type": "count_games_seasonal"
+    },
+    {
+      "id": "season_2048",
+      "title": "Сезон 2048",
+      "description": "Сыграй 10 партий в 2048 за сезон",
+      "reward": {"coins": 450, "xp": 100},
+      "target": 10,
+      "type": "play_specific_game",
+      "game": "g2048"
+    }
+  ]
+}

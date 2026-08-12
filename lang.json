@@ -1,0 +1,125 @@
+{
+  "start_subscribe": {
+    "ru": "⚠️ Для использования бота необходимо подписаться на наш канал.",
+    "en": "⚠️ To use the bot, you must subscribe to our channel.",
+    "ua": "⚠️ Для використання бота необхідно підписатися на наш канал."
+  },
+  "subscribe_btn": {
+    "ru": "📢 Подписаться",
+    "en": "📢 Subscribe",
+    "ua": "📢 Підписатися"
+  },
+  "check_sub_btn": {
+    "ru": "✅ Я подписался",
+    "en": "✅ I subscribed",
+    "ua": "✅ Я підписався"
+  },
+  "choose_language": {
+    "ru": "🌍 Выберите язык:",
+    "en": "🌍 Choose a language:",
+    "ua": "🌍 Оберіть мову:"
+  },
+  "language_saved": {
+    "ru": "✅ Язык сохранён",
+    "en": "✅ Language saved",
+    "ua": "✅ Мову збережено"
+  },
+  "main_menu": {
+    "ru": "🎮 Привет! Выбери игру:",
+    "en": "🎮 Hello! Choose a game:",
+    "ua": "🎮 Привіт! Обери гру:"
+  },
+
+  "ai_title": {
+    "ru": "🤖 Спросить AI",
+    "en": "🤖 Ask AI",
+    "ua": "🤖 Запитати AI"
+  },
+  "ai_button": {
+    "ru": "📩 Получить ответ",
+    "en": "📩 Get answer",
+    "ua": "📩 Отримати відповідь"
+  },
+  "ai_wait": {
+    "ru": "⏳ Готовлю ответ…",
+    "en": "⏳ Preparing the answer…",
+    "ua": "⏳ Готую відповідь…"
+  },
+  "ai_ready": {
+    "ru": "✅ Ответ готов",
+    "en": "✅ Answer is ready",
+    "ua": "✅ Відповідь готова"
+  },
+  "ai_error": {
+    "ru": "❌ Ошибка при получении ответа",
+    "en": "❌ Error while getting response",
+    "ua": "❌ Помилка при отриманні відповіді"
+  },
+
+  "limit_reached": {
+    "ru": "⚠️ Лимит бесплатных запросов достигнут",
+    "en": "⚠️ Free daily limit reached",
+    "ua": "⚠️ Ліміт безкоштовних запитів досягнуто"
+  },
+
+  "game_not_found": {
+    "ru": "Игра не найдена",
+    "en": "Game not found",
+    "ua": "Гру не знайдено"
+  },
+  "not_your_turn": {
+    "ru": "Сейчас не ваш ход!",
+    "en": "It's not your turn!",
+    "ua": "Зараз не ваш хід!"
+  },
+  "not_player": {
+    "ru": "Вы не участник этой игры",
+    "en": "You are not a player in this game",
+    "ua": "Ви не учасник цієї гри"
+  },
+  "game_over": {
+    "ru": "Игра окончена",
+    "en": "Game over",
+    "ua": "Гру завершено"
+  },
+
+  "rps_title": {
+    "ru": "✂️ Камень • Ножницы • Бумага",
+    "en": "✂️ Rock • Paper • Scissors",
+    "ua": "✂️ Камінь • Ножиці • Папір"
+  },
+  "rps_choose": {
+    "ru": "Выбери свой ход:",
+    "en": "Choose your move:",
+    "ua": "Обери свій хід:"
+  },
+  "rps_win": {
+    "ru": "🎉 Вы победили!",
+    "en": "🎉 You won!",
+    "ua": "🎉 Ви перемогли!"
+  },
+  "rps_lose": {
+    "ru": "💀 Вы проиграли",
+    "en": "💀 You lost",
+    "ua": "💀 Ви програли"
+  },
+  "rps_draw": {
+    "ru": "🤝 Ничья",
+    "en": "🤝 Draw",
+    "ua": "🤝 Нічия"
+  },
+
+  "premium_expire": {
+    "ru": "⚠️ Ваша премиум-подписка истекает",
+    "en": "⚠️ Your premium subscription is expiring",
+    "ua": "⚠️ Ваша преміум-підписка завершується"
+  },
+  "premium_end": {
+    "ru": "❌ Премиум-подписка окончена",
+    "en": "❌ Premium subscription expired",
+    "ua": "❌ Преміум-підписка завершена"
+  },
+
+  "yes": { "ru": "Да", "en": "Yes", "ua": "Так" },
+  "no": { "ru": "Нет", "en": "No", "ua": "Ні" }
+}
