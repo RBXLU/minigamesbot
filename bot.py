@@ -451,14 +451,33 @@ WHATS_NEW_ITEMS = {
     ],
 }
 
+# Каждый localized_text() читал состояние целиком, а инлайн-ответ переводит десятки
+# строк — на один запрос набегали секунды до обращения к Telegram.
+LANG_CACHE_TTL = float(os.getenv("LANG_CACHE_TTL", "30"))
+_lang_cache = {}
+_lang_cache_lock = threading.Lock()
+
+
 def get_user_language(user_id):
-    user = load_data().get("users", {}).get(str(user_id), {})
-    return user.get("language", "ru")
+    key = str(user_id)
+    now = time.monotonic()
+    with _lang_cache_lock:
+        cached = _lang_cache.get(key)
+        if cached and now - cached[1] < LANG_CACHE_TTL:
+            return cached[0]
+
+    lang = load_data().get("users", {}).get(key, {}).get("language", "ru")
+    with _lang_cache_lock:
+        _lang_cache[key] = (lang, now)
+    return lang
+
 
 def set_user_language(user_id, lang):
     data = load_data()
     data.setdefault("users", {}).setdefault(str(user_id), {})["language"] = lang
     save_data(data)
+    with _lang_cache_lock:
+        _lang_cache[str(user_id)] = (lang, time.monotonic())
 
 def t(user_id, key):
     lang = get_user_language(user_id)
@@ -757,6 +776,18 @@ _CUSTOM_EMOJI_REJECTIONS = (
 )
 
 
+# Пользователь продолжает печатать, и Telegram гасит предыдущий запрос — на каждое
+# нажатие приходит новый. Отвечать уже некуда, это штатный ход событий, не сбой.
+_STALE_INLINE_QUERY = ("query is too old", "query id is invalid", "query_id_invalid")
+
+
+def _is_stale_inline_query(exc):
+    if getattr(exc, "error_code", None) != 400:
+        return False
+    description = (getattr(exc, "description", "") or str(exc)).lower()
+    return any(marker in description for marker in _STALE_INLINE_QUERY)
+
+
 def _is_custom_emoji_rejection(exc):
     if getattr(exc, "error_code", None) != 400:
         return False
@@ -864,6 +895,8 @@ def answer_inline_query_with_news_emoji(inline_query_id, results=None, *args, **
     try:
         result = _original_answer_inline_query(inline_query_id, prepared, *args, **kwargs)
     except ApiTelegramException as e:
+        if _is_stale_inline_query(e):
+            return None
         if not rollback or not _is_custom_emoji_rejection(e):
             raise
         _disable_news_emoji(e)
@@ -2186,14 +2219,34 @@ def _channel_url():
         return None
     return f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}"
 
+# Кэшируем только подтверждённую подписку: отказ перепроверяем всегда, иначе
+# только что подписавшийся ждал бы истечения кэша.
+SUBSCRIPTION_CACHE_TTL = float(os.getenv("SUBSCRIPTION_CACHE_TTL", "60"))
+_subscription_cache = {}
+_subscription_lock = threading.Lock()
+
+
 def is_user_subscribed(user_id):
     if not REQUIRED_CHANNEL:
         return True
+
+    key = str(user_id)
+    now = time.monotonic()
+    with _subscription_lock:
+        cached = _subscription_cache.get(key)
+        if cached and now - cached < SUBSCRIPTION_CACHE_TTL:
+            return True
+
     try:
         member = bot.get_chat_member(REQUIRED_CHANNEL, user_id)
-        return member.status in ("creator", "administrator", "member", "restricted")
+        subscribed = member.status in ("creator", "administrator", "member", "restricted")
     except Exception:
         return False
+
+    if subscribed:
+        with _subscription_lock:
+            _subscription_cache[key] = now
+    return subscribed
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "check_subscription")
