@@ -893,6 +893,7 @@ WEBAPP_SSL_CERT = os.getenv("WEBAPP_SSL_CERT", "").strip()
 WEBAPP_SSL_KEY = os.getenv("WEBAPP_SSL_KEY", "").strip()
 # Открыть Mini App в обычном браузере (без подписи Telegram) — только для отладки
 WEBAPP_ALLOW_UNSIGNED = os.getenv("WEBAPP_ALLOW_UNSIGNED", "0") == "1"
+WEBAPP_ENABLED = os.getenv("WEBAPP_ENABLED", "1") != "0"
 
 # Игры, полностью перенесённые в Mini App: (ключ, название, эмодзи, категория)
 WEBAPP_GAMES = [
@@ -9537,23 +9538,35 @@ def _webapp_title(uid):
     return localized_text(uid, "🎮 Играть (Mini App)", "🎮 Play (Mini App)", "🎮 Грати (Mini App)")
 
 
+def _webapp_available():
+    """Mini App выключен флагом или недоступен: Telegram принимает только https."""
+    return WEBAPP_ENABLED and WEBAPP_URL.startswith("https://")
+
+
 def _webapp_keyboard_button(uid):
-    """Кнопка запуска Mini App; Telegram принимает только https-адрес."""
-    if not WEBAPP_URL.startswith("https://"):
+    if not _webapp_available():
         return None
     return types.KeyboardButton(_webapp_title(uid), web_app=types.WebAppInfo(WEBAPP_URL))
 
 
 def _webapp_inline_button(uid, game_key=None):
-    if not WEBAPP_URL.startswith("https://"):
+    if not _webapp_available():
         return None
     url = f"{WEBAPP_URL}/?game={game_key}" if game_key else WEBAPP_URL
     return types.InlineKeyboardButton(_webapp_title(uid), web_app=types.WebAppInfo(url))
 
 
 def _setup_webapp_menu_button():
-    if not WEBAPP_URL.startswith("https://"):
-        LOGGER.warning("WEBAPP_URL=%s не https — кнопки Mini App отключены", WEBAPP_URL)
+    if not _webapp_available():
+        # Кнопка живёт на стороне Telegram, поэтому её мало не выставить — надо снять.
+        try:
+            bot.set_chat_menu_button(menu_button=types.MenuButtonCommands(type="commands"))
+        except Exception as e:
+            log_exception("reset_webapp_menu_button", e)
+        if not WEBAPP_ENABLED:
+            LOGGER.info("Mini App выключен (WEBAPP_ENABLED=0) — кнопки скрыты")
+        else:
+            LOGGER.warning("WEBAPP_URL=%s не https — кнопки Mini App отключены", WEBAPP_URL)
         return
     try:
         bot.set_chat_menu_button(
@@ -9575,7 +9588,12 @@ def webapp_command(message):
     if not button:
         bot.send_message(
             message.chat.id,
-            "⚠️ Mini App пока не настроен: нужен https-адрес в WEBAPP_URL.",
+            localized_text(
+                uid,
+                "⚠️ Mini App временно отключён. Все игры доступны в чате и через inline-режим.",
+                "⚠️ The Mini App is temporarily off. Every game works in chat and inline.",
+                "⚠️ Mini App тимчасово вимкнено. Усі ігри доступні в чаті та через inline-режим.",
+            ),
         )
         return
     kb = types.InlineKeyboardMarkup()
@@ -10250,13 +10268,17 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _graceful_shutdown)
 
     start_premium_watcher(bot)
-    Thread(target=run_webapp_server, daemon=True).start()
+    if WEBAPP_ENABLED:
+        Thread(target=run_webapp_server, daemon=True).start()
     Thread(target=keep_alive, daemon=True).start()
     Thread(target=_rooms_watchdog, daemon=True).start()
     _setup_webapp_menu_button()
     if _DB_RECOVERY_NOTE:
         _send_admin_alert(f"⚠️ <b>База данных восстановлена при старте</b>\n{html.escape(_DB_RECOVERY_NOTE)}")
-    LOGGER.info("Бот запущен, Mini App слушает порт %s (публичный адрес %s)", WEBAPP_PORT, WEBAPP_URL)
+    if WEBAPP_ENABLED:
+        LOGGER.info("Бот запущен, Mini App слушает порт %s (публичный адрес %s)", WEBAPP_PORT, WEBAPP_URL)
+    else:
+        LOGGER.info("Бот запущен, Mini App выключен")
     while not _shutdown_event.is_set():
         try:
             bot.infinity_polling(timeout=30, long_polling_timeout=30)
