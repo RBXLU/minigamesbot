@@ -9,3 +9,4 @@ backups/
 .venv/
 enviroment/
 .claude/settings.local.json
+bot_data.json
