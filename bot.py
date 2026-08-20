@@ -794,6 +794,35 @@ def _is_stale_inline_query(exc):
 _INLINE_NETWORK_ERRORS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
 
 
+def _probe_upload_limit():
+    """Ищет размер запроса, на котором обрывается связь с Telegram.
+
+    Мелкие вызовы проходят, а ответы на инлайн-запросы висят до таймаута — так
+    выглядит потеря пакетов больше MTU пути. Проба шлёт getMe с добивкой разной
+    длины: getMe игнорирует лишние поля, поэтому запрос безвреден.
+    """
+    url = f"https://api.telegram.org/bot{TOKEN}/getMe"
+    LOGGER.info("Проба канала до api.telegram.org — ищем порог размера запроса")
+    for kilobytes in (1, 4, 8, 16, 32, 64):
+        started = time.monotonic()
+        try:
+            response = requests.post(
+                url, data={"padding": "x" * (kilobytes * 1024)}, timeout=20
+            )
+            LOGGER.info(
+                "  %3s КБ — ответ %s за %.1f с", kilobytes, response.status_code,
+                time.monotonic() - started,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "  %3s КБ — обрыв за %.1f с: %s", kilobytes,
+                time.monotonic() - started, type(exc).__name__,
+            )
+            LOGGER.warning("Порог найден: запросы от %s КБ не проходят", kilobytes)
+            return
+    LOGGER.info("Проба прошла целиком — обрыв не воспроизвёлся")
+
+
 def _inline_payload_size(results):
     """Размер ответа в байтах: крупная выдача — первый подозреваемый при таймауте."""
     total = 0
@@ -10352,6 +10381,9 @@ def _graceful_shutdown(signum, _frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT, _graceful_shutdown)
+
+    if os.getenv("NET_DIAGNOSTIC", "0") == "1":
+        Thread(target=_probe_upload_limit, daemon=True).start()
 
     start_premium_watcher(bot)
     if WEBAPP_ENABLED:
