@@ -887,8 +887,8 @@ DATA_FILE = "bot_data.json"
 DB_FILE = os.getenv("BOT_DB_PATH", "bot_data.sqlite3")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@minigamesbottgk")
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://slu1.heavencloud.in:2673").rstrip("/")
-WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 2673))
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://free-bots.heavencloud.in:3328").rstrip("/")
+WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 3328))
 WEBAPP_SSL_CERT = os.getenv("WEBAPP_SSL_CERT", "").strip()
 WEBAPP_SSL_KEY = os.getenv("WEBAPP_SSL_KEY", "").strip()
 # Открыть Mini App в обычном браузере (без подписи Telegram) — только для отладки
