@@ -794,6 +794,17 @@ def _is_stale_inline_query(exc):
 _INLINE_NETWORK_ERRORS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
 
 
+def _inline_payload_size(results):
+    """Размер ответа в байтах: крупная выдача — первый подозреваемый при таймауте."""
+    total = 0
+    for item in results or ():
+        try:
+            total += len(item.to_json())
+        except Exception:
+            total += len(str(item))
+    return total
+
+
 def _is_custom_emoji_rejection(exc):
     if getattr(exc, "error_code", None) != 400:
         return False
@@ -901,7 +912,10 @@ def answer_inline_query_with_news_emoji(inline_query_id, results=None, *args, **
     try:
         result = _original_answer_inline_query(inline_query_id, prepared, *args, **kwargs)
     except _INLINE_NETWORK_ERRORS as e:
-        LOGGER.warning("Инлайн-ответ не доставлен (%s): %s", type(e).__name__, e)
+        LOGGER.warning(
+            "Инлайн-ответ не доставлен (%s): %s результатов, %.1f КБ — %s",
+            type(e).__name__, len(prepared), _inline_payload_size(prepared) / 1024, e,
+        )
         return None
     except ApiTelegramException as e:
         if _is_stale_inline_query(e):
