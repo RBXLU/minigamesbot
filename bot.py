@@ -19,7 +19,7 @@ import tarfile
 import uuid
 import shutil
 from pathlib import Path
-from groq import Groq
+from openai import OpenAI
 from dotenv import load_dotenv
 from bussines_bot import register_business_handlers
 from core.db import (
@@ -418,13 +418,29 @@ GAME_DESCRIPTIONS_LANG = {
     },
 }
 
-WHATS_NEW_ITEMS = [
-    "Добавлены логирование и отдельный файл ошибок.",
-    "Главное меню теперь показывает краткий прогресс игрока.",
-    "Появились onboarding, /help и экран «Что нового».",
-    "У игр появились короткие описания и кнопка продолжения последней игры.",
-    "Квесты теперь присылают уведомление, когда цель выполнена.",
-]
+WHATS_NEW_ITEMS = {
+    "ru": [
+        "Сообщения бота теперь с анимированными эмодзи.",
+        "Убраны служебные ссылки, которые показывались вместо значков в меню и на кнопках.",
+        "Инлайн-режим переведён: игры открываются на языке из настроек.",
+        "AI-ассистент переехал на нового провайдера и отвечает стабильнее.",
+        "Бот перешёл на вежливое обращение.",
+    ],
+    "en": [
+        "Bot messages now use animated emoji.",
+        "Removed the service links that showed up instead of icons in menus and on buttons.",
+        "Inline mode is translated: games open in the language from your settings.",
+        "The AI assistant moved to a new provider and replies more reliably.",
+        "Every game now has a description in all supported languages.",
+    ],
+    "uk": [
+        "Повідомлення бота тепер з анімованими емодзі.",
+        "Прибрано службові посилання, що показувалися замість значків у меню та на кнопках.",
+        "Inline-режим перекладено: ігри відкриваються мовою з налаштувань.",
+        "AI-асистент переїхав до нового провайдера й відповідає стабільніше.",
+        "Бот перейшов на ввічливе звертання.",
+    ],
+}
 
 def get_user_language(user_id):
     user = load_data().get("users", {}).get(str(user_id), {})
@@ -598,13 +614,11 @@ LOGGER.info("Набор анимированных эмодзи: +%s к %s ру�
 NEWS_EMOJI_ENABLED = os.getenv("NEWS_EMOJI_ENABLED", "1") != "0"
 _news_emoji_active = NEWS_EMOJI_ENABLED
 
-# У Telegram есть предел на число entity в сообщении. Игровые поля и длинные сводки
-# могут содержать десятки эмодзи, поэтому такие сообщения оставляем без подстановки.
+# У Telegram есть предел на число entity в сообщении, а игровые поля содержат десятки эмодзи.
 NEWS_EMOJI_MAX_PER_MESSAGE = int(os.getenv("NEWS_EMOJI_MAX_PER_MESSAGE", "50"))
 
-# Ключи вида tg://emoji?id=... — это ссылки на премиум-эмодзи, вставленные в тексты.
-# Telegram требует, чтобы внутри <tg-emoji> стоял ровно один эмодзи, поэтому для них
-# подбираем обычный эмодзи с тем же emoji-id; если такого нет — служебную ссылку убираем.
+# Внутри <tg-emoji> Telegram требует ровно один эмодзи, а не ссылку, поэтому для ключей
+# tg://emoji?id=... подбираем эмодзи с тем же emoji-id; если такого нет — ссылку убираем.
 _NEWS_EMOJI_LINK_PREFIX = "tg://emoji?id="
 _NEWS_EMOJI_FALLBACK_CHARS = {}
 for _symbol, _emoji_id in NEWS_EMOJI_IDS.items():
@@ -628,12 +642,9 @@ def _news_emoji_pattern_part(symbol):
     return part
 
 
-# Один проход по тексту: последовательные str.replace() подставляли теги внутрь уже
-# вставленных тегов (например "⚠️" -> "⚠" + VS16) и ломали разметку.
-#
-# Границы обязательны: внутри <tg-emoji> должен быть ровно один целый эмодзи. Если
-# совпадение — лишь часть составного (тон кожи, ZWJ-связка, кейкап, VS16), Telegram
-# отвечает ENTITY_TEXT_INVALID, поэтому такие места пропускаем.
+# Один проход вместо цепочки str.replace(), которая вкладывала теги друг в друга.
+# Границы обязательны: если совпадение — лишь часть составного эмодзи (тон кожи,
+# ZWJ-связка, кейкап, VS16), Telegram отвечает ENTITY_TEXT_INVALID.
 _EMOJI_CONTINUATION = "\ufe0f\ufe0e\u200d\u20e3\U0001f3fb-\U0001f3ff"
 _NEWS_EMOJI_PATTERN = re.compile(
     "(?<!\u200d)(?:"
@@ -728,9 +739,8 @@ _original_reply_to = bot.reply_to
 _original_edit_message_text = bot.edit_message_text
 _original_answer_inline_query = bot.answer_inline_query
 
-# Кастомные эмодзи доступны не каждому боту (Telegram отвечает 400 ENTITY_TEXT_INVALID /
-# CUSTOM_EMOJI_INVALID). Раньше такой ответ убивал отправку целиком, и бот молчал на любую
-# команду. Теперь первый отказ выключает подстановку и сообщение уходит обычным текстом.
+# Отказ по кастомным эмодзи (400 ENTITY_TEXT_INVALID / CUSTOM_EMOJI_INVALID) раньше
+# убивал отправку целиком, и бот молчал на любую команду.
 _CUSTOM_EMOJI_REJECTIONS = (
     "entity_text_invalid",
     "custom_emoji_invalid",
@@ -745,9 +755,8 @@ def _is_custom_emoji_rejection(exc):
     return any(marker in description for marker in _CUSTOM_EMOJI_REJECTIONS)
 
 
-# Одно неудачное сообщение — не повод гасить анимацию во всём боте: такой текст
-# уходит обычным, а подстановка остаётся. Отключаем только если отказы идут подряд,
-# то есть проблема системная (например, у бота нет прав на кастомные эмодзи).
+# Одно неудачное сообщение уходит обычным текстом, подстановка остаётся. Гасим её
+# целиком только при череде отказов подряд — это уже системная проблема.
 NEWS_EMOJI_FAILURE_STREAK = int(os.getenv("NEWS_EMOJI_FAILURE_STREAK", "10"))
 _news_emoji_failures = 0
 _news_emoji_lock = threading.Lock()
@@ -862,8 +871,15 @@ bot.reply_to = reply_to_with_news_emoji
 bot.edit_message_text = edit_message_text_with_news_emoji
 bot.answer_inline_query = answer_inline_query_with_news_emoji
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+NVMAPI_KEY = os.getenv("NVMAPI_KEY", "").strip()
+NVMAPI_BASE_URL = os.getenv("NVMAPI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
+NVMAPI_MODEL = os.getenv("NVMAPI_MODEL", "meta/llama-3.1-8b-instruct").strip()
+NVMAPI_TIMEOUT = float(os.getenv("NVMAPI_TIMEOUT", "30"))
+nvmapi_client = (
+    OpenAI(api_key=NVMAPI_KEY, base_url=NVMAPI_BASE_URL, timeout=NVMAPI_TIMEOUT)
+    if NVMAPI_KEY
+    else None
+)
 
 FREE_DAILY_QUOTA = int(os.getenv("FREE_DAILY_QUOTA", 10))
 
@@ -1625,7 +1641,8 @@ def _render_help_text(uid):
 
 def _render_whats_new_text(uid):
     title = localized_text(uid, "🆕 Что нового", "🆕 What's New", "🆕 Що нового")
-    return "\n".join([title, ""] + [f"• {item}" for item in WHATS_NEW_ITEMS])
+    items = WHATS_NEW_ITEMS.get(get_user_language(uid), WHATS_NEW_ITEMS["ru"])
+    return "\n".join([title, ""] + [f"• {item}" for item in items])
 
 
 def _render_onboarding_text(uid):
@@ -3539,9 +3556,9 @@ def _telos_run_command(st, cmd):
 
 def ask_ai(prompt: str, user_id: int) -> str:
     if not prompt.strip():
-        return "⚠️ Напиши вопрос текстом"
-    if not groq_client:
-        return "⚠️ AI временно недоступен: не задан GROQ_API_KEY."
+        return "⚠️ Напишите вопрос текстом"
+    if not nvmapi_client:
+        return "⚠️ AI временно недоступен: не задан NVMAPI_KEY."
 
     mode = user_ai_mode.get(user_id, "chat")
     system_prompt = AI_MODES.get(mode, AI_MODES["chat"])
@@ -3565,8 +3582,8 @@ def ask_ai(prompt: str, user_id: int) -> str:
     last_err = None
     for attempt in range(3):
         try:
-            chat = groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+            chat = nvmapi_client.chat.completions.create(
+                model=NVMAPI_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt[:2000]}
@@ -4665,7 +4682,7 @@ def set_mode(message):
 
     bot.send_message(
         message.chat.id,
-        "🎛 Выбери режим ответа AI:",
+        "🎛 Выберите режим ответа AI:",
         reply_markup=kb
     )
 
@@ -5639,7 +5656,6 @@ def inline_handler(query):
         starter_id = user.id
         results = []
 
-        # Камень-ножницы-бумага
         rgid = short_id()
         rps_games[rgid] = {"uid": starter_id}
         rps_markup = types.InlineKeyboardMarkup()
@@ -5665,7 +5681,6 @@ def inline_handler(query):
         ))
 
 
-        # Крестики-нолики
         join_markup = types.InlineKeyboardMarkup()
         join_markup.add(types.InlineKeyboardButton(
             localized_text(uid, "Присоединиться ⭕", "Join ⭕", "Приєднатися ⭕"),
@@ -5714,7 +5729,6 @@ def inline_handler(query):
                 reply_markup=egg_markup
             ))
 
-        # Орёл или решка
         coin_m = types.InlineKeyboardMarkup()
         coin_m.add(types.InlineKeyboardButton(
             localized_text(uid, "Бросить 🪙", "Flip 🪙", "Кинути 🪙"), callback_data="coin_flip"))
@@ -5727,7 +5741,6 @@ def inline_handler(query):
             reply_markup=coin_m
         ))
 
-        # Wordle
         wgid = short_id()
         wgame = _wordle_new_game(starter_id)
         wordle_games[wgid] = wgame
@@ -5739,7 +5752,6 @@ def inline_handler(query):
             reply_markup=_wordle_keyboard(wgid, wgame)
         ))
 
-        # Блиц-реакция
         rgid = short_id()
         reaction_games[rgid] = {"uid": starter_id, "chat_id": None, "started": False, "start_at": None, "msg_id": None, "inline_id": None}
         rmarkup = types.InlineKeyboardMarkup()
@@ -5758,7 +5770,6 @@ def inline_handler(query):
             reply_markup=rmarkup
         ))
 
-        # Блэкджек
         bjid = short_id()
         bjstate = _bj_new_game(starter_id, None)
         blackjack_games[bjid] = bjstate
@@ -5770,7 +5781,6 @@ def inline_handler(query):
             reply_markup=_bj_keyboard(bjid, bjstate.get("status"))
         ))
 
-        # Морской бой
         bgid = short_id()
         battleship_games[bgid] = _bship_new_game(starter_id, user.first_name or user.username or str(starter_id))
         results.append(types.InlineQueryResultArticle(
@@ -5781,7 +5791,6 @@ def inline_handler(query):
             reply_markup=_bship_public_keyboard(bgid, battleship_games[bgid])
         ))
 
-        # Шахматы
         cgid = short_id()
         chess_games[cgid] = _chess_new_game(starter_id, user.first_name or user.username or str(starter_id))
         results.append(types.InlineQueryResultArticle(
@@ -5792,7 +5801,6 @@ def inline_handler(query):
             reply_markup=_chess_keyboard(cgid, chess_games[cgid])
         ))
 
-        # TELOS OS
         results.append(types.InlineQueryResultArticle(
             id=f"os_{short_id()}",
             title="🖥 TELOS v1.1 (macOS)",
@@ -5813,7 +5821,6 @@ def inline_handler(query):
             reply_markup=telos_main_menu()
         ))
 
-        # Угадай число
         results.append(types.InlineQueryResultArticle(
             id=f"guess_{short_id()}",
             title=f"🔢 {get_game_title(uid, 'guess')}",
@@ -5842,7 +5849,6 @@ def inline_handler(query):
                     reply_markup=markup_sys
                 ))
 
-        # Казино
         slot_m = types.InlineKeyboardMarkup()
         slot_m.add(types.InlineKeyboardButton(
             localized_text(uid, "🎰 Крутить", "🎰 Spin", "🎰 Крутити"), callback_data="slot_spin"))
@@ -5855,7 +5861,6 @@ def inline_handler(query):
             reply_markup=slot_m
         ))
 
-        # Змейка
         results.append(types.InlineQueryResultArticle(
             id=f"snake_{short_id()}",
             title=f"🐍 {get_game_title(uid, 'snake')}",
@@ -5869,7 +5874,6 @@ def inline_handler(query):
             reply_markup=snake_controls()
         ))
 
-        # Тетрис
         tgid = short_id()
         results.append(types.InlineQueryResultArticle(
             id=f"tetris_{tgid}",
@@ -5887,7 +5891,6 @@ def inline_handler(query):
             )
         ))
 
-        # 2048
         preview_markup = types.InlineKeyboardMarkup()
         preview_markup.row(types.InlineKeyboardButton("⬆️", callback_data="g2048_new_up"))
         preview_markup.row(types.InlineKeyboardButton("⬅️", callback_data="g2048_new_left"),
@@ -5906,7 +5909,6 @@ def inline_handler(query):
             reply_markup=preview_markup
         ))
 
-        # Пинг-понг
         pgid = short_id()
         pm = types.InlineKeyboardMarkup()
         pm.add(types.InlineKeyboardButton(
@@ -5964,7 +5966,6 @@ def inline_handler(query):
             )
         )
 
-        # Виселица
         hgid = short_id()
         hgame = hangman_games[hgid] = _hangman_new_game()
         results.append(types.InlineQueryResultArticle(
@@ -5975,7 +5976,6 @@ def inline_handler(query):
             reply_markup=render_hangman_keyboard(hgid, hgame)
         ))
 
-        # Сапёр
         mgid = short_id()
         mboard, mmine_positions = generate_minesweeper_board()
         minesweeper_games[mgid] = {"board": mboard, "revealed": set(), "mine_positions": mmine_positions}
@@ -5988,7 +5988,6 @@ def inline_handler(query):
             reply_markup=_minesweeper_build_markup(mgid, mboard, set())
         ))
 
-        # Викторина
         qgid = short_id()
         qqdata = random.choice(QUIZ_QUESTIONS)
         quiz_games[qgid] = _quiz_new_game(qqdata, starter_id, user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
@@ -6000,7 +5999,6 @@ def inline_handler(query):
             reply_markup=_quiz_join_kb(qgid)
         ))
 
-        # Комбо-битва
         cgid = short_id()
         combo_games[cgid] = _combo_new_game(starter_id, user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
         results.append(types.InlineQueryResultArticle(
@@ -6011,7 +6009,6 @@ def inline_handler(query):
             reply_markup=_combo_join_kb(cgid)
         ))
 
-        # Мафия
         mgid = short_id()
         mafia_games[mgid] = mafia_new_game(starter_id, user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
         results.append(types.InlineQueryResultArticle(
@@ -6027,7 +6024,6 @@ def inline_handler(query):
             reply_markup=mafia_build_lobby_kb(mgid)
         ))
 
-        # Покер против бота
         pkgid = short_id()
         pk_bet = 10
         pk_state = _poker_new_game(starter_id, None, pk_bet)
@@ -6050,7 +6046,6 @@ def inline_handler(query):
             reply_markup=_poker_keyboard(pkgid, pk_state)
         ))
 
-        # Дуэль на двоих (КНБ)
         dgid = short_id()
         p1_name = user.first_name or str(starter_id)
         inline_duel_games[dgid] = {
@@ -6320,7 +6315,7 @@ def guess_inline_callback(call):
 
         hint = "меньше" if guess > state["target"] else "больше"
         bot.edit_message_text(
-            f"🔢 Угадай число (1–10)\nПопыток осталось: {state['attempts']}\nТвое предположение: {guess} — {hint}",
+            f"🔢 Угадай число (1–10)\nПопыток осталось: {state['attempts']}\nВаше предположение: {guess} — {hint}",
             inline_message_id=mid,
             reply_markup=_number_grid(types.InlineKeyboardMarkup(), "guess_inline_")
         )
@@ -6411,7 +6406,7 @@ def hide_set(call):
     kb = hide_keyboard(f"hide_secret_{gid}")
 
     bot.edit_message_text(
-        "🎯 *Выбери клетку, где вы прячетесь:*",
+        "🎯 *Выберите клетку, где вы прячетесь:*",
         inline_message_id=call.inline_message_id,
         reply_markup=kb,
         parse_mode="Markdown"
@@ -6999,10 +6994,10 @@ def inline_2048(query):
     results = [types.InlineQueryResultArticle(
         id=f"g2048_preview_{short_id()}",
         title=f"🔢 {get_game_title(uid, 'g2048')}",
-        description=localized_text(uid, "Нажми стрелку, чтобы начать", "Press an arrow to start", "Натисни стрілку, щоб почати"),
+        description=localized_text(uid, "Нажмите стрелку, чтобы начать", "Press an arrow to start", "Натисни стрілку, щоб почати"),
         input_message_content=types.InputTextMessageContent(localized_text(
             uid,
-            "🔢 2048\nНажми кнопку, чтобы начать.",
+            "🔢 2048\nНажмите кнопку, чтобы начать.",
             "🔢 2048\nPress a button to start.",
             "🔢 2048\nНатисни кнопку, щоб почати.",
         )),
@@ -7067,13 +7062,13 @@ def rps_callback(call):
             (user_choice == "scissors" and bot_choice == "paper") or
             (user_choice == "paper" and bot_choice == "rock")
         ):
-            result = "🎉 Ты победил!"
+            result = "🎉 Вы победили!"
         else:
-            result = "😢 Ты проиграл"
+            result = "😢 Вы проиграли"
 
         text = (
             "✂️ *Камень • Ножницы • Бумага*\n\n"
-            f"👤 Ты: {icons[user_choice]}\n"
+            f"👤 Вы: {icons[user_choice]}\n"
             f"🤖 Бот: {icons[bot_choice]}\n\n"
             f"{result}"
         )
@@ -9700,7 +9695,7 @@ webapp_server = create_webapp(
 
 @webapp_server.route("/status")
 def webapp_status():
-    return "✅ если ты это видишь — бот работает"
+    return "✅ если вы это видите — бот работает"
 
 
 def run_webapp_server():

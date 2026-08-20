@@ -1,4 +1,4 @@
 pyTelegramBotAPI
 Flask
 python-dotenv
-groq
+openai
