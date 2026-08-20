@@ -1,6 +1,7 @@
 import telebot
 from telebot import types
 import re
+import requests
 from telebot.apihelper import ApiTelegramException
 import random
 import time
@@ -788,6 +789,11 @@ def _is_stale_inline_query(exc):
     return any(marker in description for marker in _STALE_INLINE_QUERY)
 
 
+# Инлайн-запрос живёт секунды, так что повторять отправку некуда: к моменту ответа
+# Telegram его уже погасит. Полный трейсбек на каждый обрыв связи только засоряет лог.
+_INLINE_NETWORK_ERRORS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+
+
 def _is_custom_emoji_rejection(exc):
     if getattr(exc, "error_code", None) != 400:
         return False
@@ -894,6 +900,9 @@ def answer_inline_query_with_news_emoji(inline_query_id, results=None, *args, **
     prepared = [_prepare_inline_result(result, rollback) for result in (results or [])]
     try:
         result = _original_answer_inline_query(inline_query_id, prepared, *args, **kwargs)
+    except _INLINE_NETWORK_ERRORS as e:
+        LOGGER.warning("Инлайн-ответ не доставлен (%s): %s", type(e).__name__, e)
+        return None
     except ApiTelegramException as e:
         if _is_stale_inline_query(e):
             return None
@@ -2176,7 +2185,8 @@ def start_premium_watcher(bot_instance, check_interval=3600):
             try:
                 data = load_data()
                 pm = data.get("premium", {})
-                now = datetime.utcnow()
+                # fromtimestamp() ниже отдаёт локальное время, поэтому и здесь оно же.
+                now = datetime.now()
                 for uid_str, info in list(pm.items()):
                     try:
                         until_ts = info.get("until")
@@ -2187,7 +2197,7 @@ def start_premium_watcher(bot_instance, check_interval=3600):
                         uid = int(uid_str)
                         if 0 < seconds_left <= 24 * 3600 and not info.get("reminded_24h"):
                             try:
-                                bot_instance.send_message(uid, f"⚠️ Ваша премиум-подписка истекает {until_dt.isoformat()} UTC. Продлите, чтобы не потерять доступ.")
+                                bot_instance.send_message(uid, f"⚠️ Ваша премиум-подписка истекает {until_dt:%d.%m.%Y %H:%M}. Продлите, чтобы не потерять доступ.")
                             except Exception as e:
                                 log_exception("premium_notify_24h", e, user_id=uid)
                             info["reminded_24h"] = True
