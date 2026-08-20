@@ -420,25 +420,34 @@ GAME_DESCRIPTIONS_LANG = {
 
 WHATS_NEW_ITEMS = {
     "ru": [
-        "Сообщения бота теперь с анимированными эмодзи.",
+        "Почичнены анимированые эмодзи.",
         "Убраны служебные ссылки, которые показывались вместо значков в меню и на кнопках.",
         "Инлайн-режим переведён: игры открываются на языке из настроек.",
         "AI-ассистент переехал на нового провайдера и отвечает стабильнее.",
-        "Бот перешёл на вежливое обращение.",
+        "Теперь обновления показываться и в боте, а не только в канале.",
+        "Бот теперь опенсорсный (гитхаб репо: github.com/RBXLU/minigamesbot)",
+        "Починен магазин (чтобы экипировать предмет, нажмите по нему еще раз)",
+        "Mini app сейчас не готов, так как у меня нет подписи сертификата"
     ],
     "en": [
-        "Bot messages now use animated emoji.",
+        "Fixed animated emoji.",
         "Removed the service links that showed up instead of icons in menus and on buttons.",
         "Inline mode is translated: games open in the language from your settings.",
         "The AI assistant moved to a new provider and replies more reliably.",
-        "Every game now has a description in all supported languages.",
+        "The mini app isn't ready right now because I don't have the signing certificate.",
+        "The bot is now open-source (GitHub repo: github.com/RBXLU/minigamesbot)",
+        "The shop has been fixed (to equip an item, click on it again).",
     ],
     "uk": [
         "Повідомлення бота тепер з анімованими емодзі.",
         "Прибрано службові посилання, що показувалися замість значків у меню та на кнопках.",
         "Inline-режим перекладено: ігри відкриваються мовою з налаштувань.",
         "AI-асистент переїхав до нового провайдера й відповідає стабільніше.",
-        "Бот перейшов на ввічливе звертання.",
+        "Тепер оновлення показуватимуться і в боті, а не тільки в каналі.",
+        "Бот тепер опенсорсний (гітхаб репо: github.com/RBXLU/minigamesbot)",
+        "Полагоджений магазин (щоб екіпірувати предмет, натисніть по ньому ще раз)",
+        "Mini app зараз не готовий, тому що я не маю підпису сертифіката",
+        
     ],
 }
 
