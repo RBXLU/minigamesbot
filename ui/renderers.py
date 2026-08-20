@@ -29,43 +29,43 @@ def render_profile_text(uid, user, lang, achievements_count, achievements_total,
     if lang == "uk":
         lines = [
             f"{avatar} Профіль: {display_name}",
-            f"tg://emoji?id=5467583879948803288 Всього зіграно: {total}",
+            f"🎮 Всього зіграно: {total}",
             f"🪙 Монети: {coins}",
-            f"tg://emoji?id=5409008750893734809 Досягнення: {achievements_count}/{achievements_total}",
+            f"🏆 Досягнення: {achievements_count}/{achievements_total}",
             f"🏅 Улюблена гра: {fav_game}" + (f" ({fav_count})" if fav_count else ""),
             f"📈 Winrate: {winrate:.1f}% (W:{wins_total} L:{losses_total} D:{draws_total})",
             f"🎨 Оформлення: рамка={frame_style}, тема={theme_style}, перемога={victory_emoji}",
         ]
-        stats_title = "tg://emoji?id=5431577498364158238 Статистика по іграх:"
-        stats_empty = "tg://emoji?id=5431577498364158238 Статистика по іграх: поки порожньо"
+        stats_title = "📊 Статистика по іграх:"
+        stats_empty = "📊 Статистика по іграх: поки порожньо"
         history_title = "🕓 Останні матчі:"
         default_game = "Гра"
     elif lang == "en":
         lines = [
             f"{avatar} Profile: {display_name}",
-            f"tg://emoji?id=5467583879948803288 Total games: {total}",
+            f"🎮 Total games: {total}",
             f"🪙 Coins: {coins}",
-            f"tg://emoji?id=5409008750893734809 Achievements: {achievements_count}/{achievements_total}",
+            f"🏆 Achievements: {achievements_count}/{achievements_total}",
             f"🏅 Favorite game: {fav_game}" + (f" ({fav_count})" if fav_count else ""),
             f"📈 Winrate: {winrate:.1f}% (W:{wins_total} L:{losses_total} D:{draws_total})",
             f"🎨 Style: frame={frame_style}, theme={theme_style}, victory={victory_emoji}",
         ]
-        stats_title = "tg://emoji?id=5431577498364158238 Game stats:"
-        stats_empty = "tg://emoji?id=5431577498364158238 Game stats: empty for now"
+        stats_title = "📊 Game stats:"
+        stats_empty = "📊 Game stats: empty for now"
         history_title = "🕓 Recent matches:"
         default_game = "Game"
     else:
         lines = [
             f"{avatar} Профиль: {display_name}",
-            f"tg://emoji?id=5467583879948803288 Всего сыграно: {total}",
+            f"🎮 Всего сыграно: {total}",
             f"🪙 Монеты: {coins}",
-            f"tg://emoji?id=5409008750893734809 Достижения: {achievements_count}/{achievements_total}",
+            f"🏆 Достижения: {achievements_count}/{achievements_total}",
             f"🏅 Любимая игра: {fav_game}" + (f" ({fav_count})" if fav_count else ""),
             f"📈 Winrate: {winrate:.1f}% (W:{wins_total} L:{losses_total} D:{draws_total})",
             f"🎨 Оформление: рамка={frame_style}, тема={theme_style}, победа={victory_emoji}",
         ]
-        stats_title = "tg://emoji?id=5431577498364158238 Статистика по играм:"
-        stats_empty = "tg://emoji?id=5431577498364158238 Статистика по играм: пока пусто"
+        stats_title = "📊 Статистика по играм:"
+        stats_empty = "📊 Статистика по играм: пока пусто"
         history_title = "🕓 Последние матчи:"
         default_game = "Игра"
 
@@ -97,16 +97,16 @@ def render_achievements_text(lang, achievements, unlocked):
     total = len(achievements)
     unlocked_count = len(unlocked)
     if lang == "uk":
-        lines = [f"tg://emoji?id=5409008750893734809 Досягнення: {unlocked_count}/{total}"]
-        opened_title = "tg://emoji?id=5427009714745517609 Відкрито:"
+        lines = [f"🏆 Досягнення: {unlocked_count}/{total}"]
+        opened_title = "✅ Відкрито:"
         locked_title = "🔒 Закрито:"
     elif lang == "en":
-        lines = [f"tg://emoji?id=5409008750893734809 Achievements: {unlocked_count}/{total}"]
-        opened_title = "tg://emoji?id=5427009714745517609 Unlocked:"
+        lines = [f"🏆 Achievements: {unlocked_count}/{total}"]
+        opened_title = "✅ Unlocked:"
         locked_title = "🔒 Locked:"
     else:
-        lines = [f"tg://emoji?id=5409008750893734809 Достижения: {unlocked_count}/{total}"]
-        opened_title = "tg://emoji?id=5427009714745517609 Открыты:"
+        lines = [f"🏆 Достижения: {unlocked_count}/{total}"]
+        opened_title = "✅ Открыты:"
         locked_title = "🔒 Закрыты:"
 
     if unlocked:

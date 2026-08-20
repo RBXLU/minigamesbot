@@ -1,5 +1,6 @@
 import telebot
 from telebot import types
+import re
 from telebot.apihelper import ApiTelegramException
 import random
 import time
@@ -163,104 +164,104 @@ def load_quests():
 QUESTS = load_quests()
 
 LANGUAGES = {
-    "uk": "tg://emoji?id=5447309366568953338 Українська",
-    "ru": "tg://emoji?id=5449408995691341691 Русский",
-    "en": "tg://emoji?id=5202196682497859879 English"
+    "uk": "🇺🇦 Українська",
+    "ru": "🇷🇺 Русский",
+    "en": "🇬🇧 English"
 }
 
 TRANSLATIONS = {
     "uk": {
-        "main_menu": "tg://emoji?id=5334882760735598374 Головне меню",
+        "main_menu": "🏠 Головне меню",
         "choose_option": "Виберіть опцію:",
-        "back_to_menu": "tg://emoji?id=5373292756342938165 Назад до меню",
-        "games": "tg://emoji?id=5467583879948803288 Ігри",
-        "profile": "tg://emoji?id=5373012449597335010 Профіль",
-        "ai": "tg://emoji?id=5372981976804366741 AI-асистент",
-        "shop": "tg://emoji?id=5431499171045581032 Магазин",
-        "achievements": "tg://emoji?id=5409008750893734809 Досягнення",
-        "leaderboard": "tg://emoji?id=5431577498364158238 Рейтинг",
-        "support": "tg://emoji?id=5465300082628763143 Підтримка",
-        "settings": "tg://emoji?id=5369752984382456789 Налаштування",
+        "back_to_menu": "↩️ Назад до меню",
+        "games": "🎮 Ігри",
+        "profile": "👤 Профіль",
+        "ai": "🤖 AI-асистент",
+        "shop": "🛒 Магазин",
+        "achievements": "🏆 Досягнення",
+        "leaderboard": "📊 Рейтинг",
+        "support": "💬 Підтримка",
+        "settings": "⚙️ Налаштування",
         "quests": "Квести",
-        "create_room": "tg://emoji?id=5467918917462688479 Створити кімнату",
-        "choose_language": "tg://emoji?id=5399898266265475100 Оберіть мову:",
-        "language_changed": "tg://emoji?id=5427009714745517609 Мову змінено!",
+        "create_room": "🚪 Створити кімнату",
+        "choose_language": "🌍 Оберіть мову:",
+        "language_changed": "✅ Мову змінено!",
         "welcome": "Ласкаво просимо! Оберіть мову для початку:",
-        "games_solo": "tg://emoji?id=5373012449597335010 Одиночні ігри",
-        "games_vs_bot": "tg://emoji?id=5372981976804366741 Проти бота",
-        "games_multi": "tg://emoji?id=5372926953978341366 Мультиплеєр",
-        "games_room": "tg://emoji?id=5467918917462688479 Ігри в кімнаті",
-        "choose_game_category": "tg://emoji?id=5467583879948803288 Виберіть категорію ігор:",
-        "invalid_language": "tg://emoji?id=5465665476971471368 Некоректна мова",
+        "games_solo": "👤 Одиночні ігри",
+        "games_vs_bot": "🤖 Проти бота",
+        "games_multi": "👥 Мультиплеєр",
+        "games_room": "🚪 Ігри в кімнаті",
+        "choose_game_category": "🎮 Виберіть категорію ігор:",
+        "invalid_language": "❌ Некоректна мова",
         "unknown_category": "Невідома категорія",
-        "support_menu_title": "tg://emoji?id=5465300082628763143 Меню підтримки",
+        "support_menu_title": "💬 Меню підтримки",
         "contact_support": "📧 Звернутися до підтримки",
-        "faq": "tg://emoji?id=5467666648263564704 FAQ",
-        "settings_title": "tg://emoji?id=5369752984382456789 Налаштування",
-        "language_label": "tg://emoji?id=5399898266265475100 Мова",
-        "notifications": "tg://emoji?id=5242628160297641831 Сповіщення",
+        "faq": "❓ FAQ",
+        "settings_title": "⚙️ Налаштування",
+        "language_label": "🌍 Мова",
+        "notifications": "🔔 Сповіщення",
     },
     "ru": {
-        "main_menu": "tg://emoji?id=5334882760735598374 Главное меню",
+        "main_menu": "🏠 Главное меню",
         "choose_option": "Выберите опцию:",
-        "back_to_menu": "tg://emoji?id=5373292756342938165 Назад в меню",
-        "games": "tg://emoji?id=5467583879948803288 Игры",
-        "profile": "tg://emoji?id=5373012449597335010 Профиль",
-        "ai": "tg://emoji?id=5372981976804366741 AI-ассистент",
-        "shop": "tg://emoji?id=5431499171045581032 Магазин",
-        "achievements": "tg://emoji?id=5409008750893734809 Достижения",
-        "leaderboard": "tg://emoji?id=5431577498364158238 Рейтинг",
-        "support": "tg://emoji?id=5465300082628763143 Поддержка",
-        "settings": "tg://emoji?id=5369752984382456789 Настройки",
+        "back_to_menu": "↩️ Назад в меню",
+        "games": "🎮 Игры",
+        "profile": "👤 Профиль",
+        "ai": "🤖 AI-ассистент",
+        "shop": "🛒 Магазин",
+        "achievements": "🏆 Достижения",
+        "leaderboard": "📊 Рейтинг",
+        "support": "💬 Поддержка",
+        "settings": "⚙️ Настройки",
         "quests": "Квесты",
-        "create_room": "tg://emoji?id=5467918917462688479 Создать комнату",
-        "choose_language": "tg://emoji?id=5399898266265475100 Выберите язык:",
-        "language_changed": "tg://emoji?id=5427009714745517609 Язык изменён!",
+        "create_room": "🚪 Создать комнату",
+        "choose_language": "🌍 Выберите язык:",
+        "language_changed": "✅ Язык изменён!",
         "welcome": "Добро пожаловать! Выберите язык для начала:",
-        "games_solo": "tg://emoji?id=5373012449597335010 Одиночные игры",
-        "games_vs_bot": "tg://emoji?id=5372981976804366741 Против бота",
-        "games_multi": "tg://emoji?id=5372926953978341366 Мультиплеер",
-        "games_room": "tg://emoji?id=5467918917462688479 Игры в комнате",
-        "choose_game_category": "tg://emoji?id=5467583879948803288 Выберите категорию игр:",
-        "invalid_language": "tg://emoji?id=5465665476971471368 Неверный язык",
+        "games_solo": "👤 Одиночные игры",
+        "games_vs_bot": "🤖 Против бота",
+        "games_multi": "👥 Мультиплеер",
+        "games_room": "🚪 Игры в комнате",
+        "choose_game_category": "🎮 Выберите категорию игр:",
+        "invalid_language": "❌ Неверный язык",
         "unknown_category": "Неизвестная категория",
-        "support_menu_title": "tg://emoji?id=5465300082628763143 Меню поддержки",
+        "support_menu_title": "💬 Меню поддержки",
         "contact_support": "📧 Обратиться в поддержку",
-        "faq": "tg://emoji?id=5467666648263564704 FAQ",
-        "settings_title": "tg://emoji?id=5369752984382456789 Настройки",
-        "language_label": "tg://emoji?id=5399898266265475100 Язык",
-        "notifications": "tg://emoji?id=5242628160297641831 Уведомления",
+        "faq": "❓ FAQ",
+        "settings_title": "⚙️ Настройки",
+        "language_label": "🌍 Язык",
+        "notifications": "🔔 Уведомления",
     },
     "en": {
-        "main_menu": "tg://emoji?id=5334882760735598374 Main Menu",
+        "main_menu": "🏠 Main Menu",
         "choose_option": "Choose an option:",
-        "back_to_menu": "tg://emoji?id=5373292756342938165 Back to Menu",
-        "games": "tg://emoji?id=5467583879948803288 Games",
-        "profile": "tg://emoji?id=5373012449597335010 Profile",
-        "ai": "tg://emoji?id=5372981976804366741 AI Assistant",
-        "shop": "tg://emoji?id=5431499171045581032 Shop",
-        "achievements": "tg://emoji?id=5409008750893734809 Achievements",
-        "leaderboard": "tg://emoji?id=5431577498364158238 Leaderboard",
-        "support": "tg://emoji?id=5465300082628763143 Support",
-        "settings": "tg://emoji?id=5369752984382456789 Settings",
+        "back_to_menu": "↩️ Back to Menu",
+        "games": "🎮 Games",
+        "profile": "👤 Profile",
+        "ai": "🤖 AI Assistant",
+        "shop": "🛒 Shop",
+        "achievements": "🏆 Achievements",
+        "leaderboard": "📊 Leaderboard",
+        "support": "💬 Support",
+        "settings": "⚙️ Settings",
         "quests": "Quests",
-        "create_room": "tg://emoji?id=5467918917462688479 Create Room",
-        "choose_language": "tg://emoji?id=5399898266265475100 Choose language:",
-        "language_changed": "tg://emoji?id=5427009714745517609 Language changed!",
+        "create_room": "🚪 Create Room",
+        "choose_language": "🌍 Choose language:",
+        "language_changed": "✅ Language changed!",
         "welcome": "Welcome! Choose your language to start:",
-        "games_solo": "tg://emoji?id=5373012449597335010 Solo Games",
-        "games_vs_bot": "tg://emoji?id=5372981976804366741 VS Bot",
-        "games_multi": "tg://emoji?id=5372926953978341366 Multiplayer",
-        "games_room": "tg://emoji?id=5467918917462688479 Room Games",
-        "choose_game_category": "tg://emoji?id=5467583879948803288 Choose game category:",
-        "invalid_language": "tg://emoji?id=5465665476971471368 Invalid language",
+        "games_solo": "👤 Solo Games",
+        "games_vs_bot": "🤖 VS Bot",
+        "games_multi": "👥 Multiplayer",
+        "games_room": "🚪 Room Games",
+        "choose_game_category": "🎮 Choose game category:",
+        "invalid_language": "❌ Invalid language",
         "unknown_category": "Unknown category",
-        "support_menu_title": "tg://emoji?id=5465300082628763143 Support Menu",
+        "support_menu_title": "💬 Support Menu",
         "contact_support": "📧 Contact Support",
-        "faq": "tg://emoji?id=5467666648263564704 FAQ",
-        "settings_title": "tg://emoji?id=5369752984382456789 Settings",
-        "language_label": "tg://emoji?id=5399898266265475100 Language",
-        "notifications": "tg://emoji?id=5242628160297641831 Notifications",
+        "faq": "❓ FAQ",
+        "settings_title": "⚙️ Settings",
+        "language_label": "🌍 Language",
+        "notifications": "🔔 Notifications",
     }
 }
 
@@ -349,6 +350,11 @@ GAME_DESCRIPTIONS_LANG = {
         "room_quiz": "Общая викторина для комнаты.",
         "room_combo": "Комнатная комбо-битва.",
         "room_mafia": "Мафия для компании в комнате.",
+        "coin": "Подбросьте монетку: орёл или решка.",
+        "mafia": "Ночь, день и голосование в компании 4-10 игроков.",
+        "millionaire": "Отвечайте на вопросы и проверьте эрудицию.",
+        "pong": "Настольный пинг-понг на двоих.",
+        "reaction": "Проверьте скорость реакции на сигнал.",
     },
     "uk": {
         "snake": "Аркада на реакцію: збирайте їжу й не вріжтесь у стіну.",
@@ -374,6 +380,11 @@ GAME_DESCRIPTIONS_LANG = {
         "room_quiz": "Спільна вікторина для кімнати.",
         "room_combo": "Кімнатна комбо-битва.",
         "room_mafia": "Мафія для компанії в кімнаті.",
+        "coin": "Підкиньте монетку: орел чи решка.",
+        "mafia": "Ніч, день і голосування у компанії 4-10 гравців.",
+        "millionaire": "Відповідайте на питання та перевірте ерудицію.",
+        "pong": "Настільний пінг-понг на двох.",
+        "reaction": "Перевірте швидкість реакції на сигнал.",
     },
     "en": {
         "snake": "Reaction arcade: collect food and avoid the walls.",
@@ -399,6 +410,11 @@ GAME_DESCRIPTIONS_LANG = {
         "room_quiz": "Shared quiz for the whole room.",
         "room_combo": "Room combo battle.",
         "room_mafia": "Mafia party mode for a room.",
+        "coin": "Flip a coin: heads or tails.",
+        "mafia": "Night, day and voting for 4-10 players.",
+        "millionaire": "Answer questions and test your knowledge.",
+        "pong": "Table ping-pong for two players.",
+        "reaction": "Test how fast you react to the signal.",
     },
 }
 
@@ -473,15 +489,15 @@ except Exception:
 register_room_game_handlers(bot)
 
 NEWS_EMOJI_IDS = {
-    "tg://emoji?id=5427009714745517609": "5206607081334906820",
-    "tg://emoji?id=5465665476971471368": "5210952531676504517",
+    "✅ ": "5206607081334906820",
+    "❌ ": "5210952531676504517",
     "⚠️": "5447644880824181073",
     "⚠": "5447644880824181073",
     "❗": "5274099962655816924",
-    "tg://emoji?id=5467666648263564704": "5436113877181941026",
-    "tg://emoji?id=5431577498364158238": "5231200819986047254",
+    "❓ ": "5436113877181941026",
+    "📊 ": "5231200819986047254",
     "📢": "5424818078833715060",
-    "tg://emoji?id=5465300082628763143": "5443038326535759644",
+    "💬 ": "5443038326535759644",
     "💭": "5467538555158943525",
     "💰": "5409048419211682843",
     "💸": "5233326571099534068",
@@ -494,8 +510,8 @@ NEWS_EMOJI_IDS = {
     "👋": "5337080053119336309",
     "🎉": "5461151367559141950",
     "🎭": "5361741454685256344",
-    "tg://emoji?id=5467583879948803288": "5361741454685256344",
-    "tg://emoji?id=5467918917462688479": "5361741454685256344",
+    "🎮 ": "5361741454685256344",
+    "🚪 ": "5361741454685256344",
     "📚": "5406756500108501710",
     "📌": "5397782960512444700",
     "📍": "5391032818111363540",
@@ -507,17 +523,17 @@ NEWS_EMOJI_IDS = {
     "🔁": "5375338737028841420",
     "🔒": "5296369303661067030",
     "🔍": "5231012545799666522",
-    "tg://emoji?id=5242628160297641831": "5458603043203327669",
+    "🔔 ": "5458603043203327669",
     "⛔": "5260293700088511294",
     "🧹": "5445267414562389170",
     "✍️": "5395444784611480792",
     "✍": "5395444784611480792",
-    "tg://emoji?id=5373012449597335010": "5449683594425410231",
+    "👤 ": "5449683594425410231",
     "🏪": "5406683434124859552",
     "🏠": "5416041192905265756",
     "🎰": "5361741454685256344",
     "⏳": "5386367538735104399",
-    "tg://emoji?id=5369752984382456789": "5341715473882955310",
+    "⚙️ ": "5341715473882955310",
     "⚙": "5341715473882955310",
     "📣": "5460795800101594035",
     "ℹ️": "5334544901428229844",
@@ -533,13 +549,13 @@ NEWS_EMOJI_IDS = {
     "😏": "5370976574969486150",
     "📝": "5395444784611480792",
     "🪙": "5402186569006210455",
-    "tg://emoji?id=5431499171045581032": "5229064374403998351",
-    "tg://emoji?id=5409008750893734809": "5440539497383087970",
-    "tg://emoji?id=5372981976804366741": "5269531045165816230",
-    "tg://emoji?id=5334882760735598374": "5222444124698853913",
+    "🛒 ": "5229064374403998351",
+    "🏆 ": "5440539497383087970",
+    "🤖 ": "5269531045165816230",
+    "🏠 ": "5222444124698853913",
     "📧": "5253742260054409879",
-    "tg://emoji?id=5399898266265475100": "5447410659077661506",
-    "tg://emoji?id=5373292756342938165": "5416117059207572332",
+    "🌍 ": "5447410659077661506",
+    "↩️ ": "5416117059207572332",
     "↩": "5416117059207572332",
     "💀": "5370971163310693562",
     "✅": "5206607081334906820",
@@ -552,24 +568,115 @@ NEWS_EMOJI_IDS = {
 }
 
 
+def _load_emoji_pack(path="emoji_pack.json"):
+    """Анимированные эмодзи из набора t.me/addemoji/RestrictedEmoji.
+
+    Ручные значения в NEWS_EMOJI_IDS приоритетнее: там часть эмодзи намеренно
+    указывает на другой стикер.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            pack = json.load(f)
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        LOGGER.exception("Не удалось прочитать %s", path)
+        return 0
+
+    added = 0
+    for symbol, emoji_id in pack.items():
+        if isinstance(symbol, str) and isinstance(emoji_id, str) and symbol not in NEWS_EMOJI_IDS:
+            NEWS_EMOJI_IDS[symbol] = emoji_id
+            added += 1
+    return added
+
+
+_EMOJI_PACK_ADDED = _load_emoji_pack()
+LOGGER.info("Набор анимированных эмодзи: +%s к %s ручным",
+            _EMOJI_PACK_ADDED, len(NEWS_EMOJI_IDS) - _EMOJI_PACK_ADDED)
+
+NEWS_EMOJI_ENABLED = os.getenv("NEWS_EMOJI_ENABLED", "1") != "0"
+_news_emoji_active = NEWS_EMOJI_ENABLED
+
+# У Telegram есть предел на число entity в сообщении. Игровые поля и длинные сводки
+# могут содержать десятки эмодзи, поэтому такие сообщения оставляем без подстановки.
+NEWS_EMOJI_MAX_PER_MESSAGE = int(os.getenv("NEWS_EMOJI_MAX_PER_MESSAGE", "50"))
+
+# Ключи вида tg://emoji?id=... — это ссылки на премиум-эмодзи, вставленные в тексты.
+# Telegram требует, чтобы внутри <tg-emoji> стоял ровно один эмодзи, поэтому для них
+# подбираем обычный эмодзи с тем же emoji-id; если такого нет — служебную ссылку убираем.
+_NEWS_EMOJI_LINK_PREFIX = "tg://emoji?id="
+_NEWS_EMOJI_FALLBACK_CHARS = {}
+for _symbol, _emoji_id in NEWS_EMOJI_IDS.items():
+    if not _symbol.startswith(_NEWS_EMOJI_LINK_PREFIX):
+        _NEWS_EMOJI_FALLBACK_CHARS.setdefault(_emoji_id, _symbol)
+
+# В текстах эмодзи встречается и голым, и с селектором начертания ("🛡" и "🛡️").
+# Без пары для второй формы паттерн отрезал бы базовый символ, оставив VS16 снаружи.
+_VARIATION_SELECTOR_16 = "\ufe0f"
+for _symbol, _emoji_id in list(NEWS_EMOJI_IDS.items()):
+    if len(_symbol) == 1 and _symbol + _VARIATION_SELECTOR_16 not in NEWS_EMOJI_IDS:
+        NEWS_EMOJI_IDS[_symbol + _VARIATION_SELECTOR_16] = _emoji_id
+
+
+def _news_emoji_pattern_part(symbol):
+    part = re.escape(symbol)
+    if symbol.startswith(_NEWS_EMOJI_LINK_PREFIX):
+        # Ссылка идёт как "tg://emoji?id=... Текст"; если замены нет, разделяющий
+        # пробел тоже лишний.
+        part += " ?"
+    return part
+
+
+# Один проход по тексту: последовательные str.replace() подставляли теги внутрь уже
+# вставленных тегов (например "⚠️" -> "⚠" + VS16) и ломали разметку.
+#
+# Границы обязательны: внутри <tg-emoji> должен быть ровно один целый эмодзи. Если
+# совпадение — лишь часть составного (тон кожи, ZWJ-связка, кейкап, VS16), Telegram
+# отвечает ENTITY_TEXT_INVALID, поэтому такие места пропускаем.
+_EMOJI_CONTINUATION = "\ufe0f\ufe0e\u200d\u20e3\U0001f3fb-\U0001f3ff"
+_NEWS_EMOJI_PATTERN = re.compile(
+    "(?<!\u200d)(?:"
+    + "|".join(_news_emoji_pattern_part(symbol) for symbol in sorted(NEWS_EMOJI_IDS, key=len, reverse=True))
+    + f")(?![{_EMOJI_CONTINUATION}])"
+)
+
+
 def _news_emoji_tag(symbol: str) -> str:
     emoji_id = NEWS_EMOJI_IDS.get(symbol)
     if not emoji_id:
         return symbol
-    return f'<tg-emoji emoji-id="{emoji_id}">{symbol}</tg-emoji>'
+    label = symbol
+    if symbol.startswith(_NEWS_EMOJI_LINK_PREFIX):
+        label = _NEWS_EMOJI_FALLBACK_CHARS.get(emoji_id)
+        if not label:
+            return ""
+    return f'<tg-emoji emoji-id="{emoji_id}">{label}</tg-emoji>'
+
+
+def _news_emoji_substitute(match):
+    token = match.group(0)
+    symbol, trailing = token, ""
+    if symbol not in NEWS_EMOJI_IDS and symbol.endswith(" "):
+        symbol, trailing = symbol[:-1], " "
+    tag = _news_emoji_tag(symbol)
+    if not tag:
+        return ""
+    return tag + trailing
 
 
 def apply_news_emoji(text):
-    if not isinstance(text, str):
+    if not isinstance(text, str) or not _news_emoji_active:
         return text, False
 
-    updated = text
-    changed = False
-    for symbol in sorted(NEWS_EMOJI_IDS, key=len, reverse=True):
-        if symbol in updated:
-            updated = updated.replace(symbol, _news_emoji_tag(symbol))
-            changed = True
-    return updated, changed
+    matches = _NEWS_EMOJI_PATTERN.findall(text)
+    if not matches:
+        return text, False
+    if len(matches) > NEWS_EMOJI_MAX_PER_MESSAGE:
+        return text, False
+
+    updated = _NEWS_EMOJI_PATTERN.sub(_news_emoji_substitute, text)
+    return updated, updated != text
 
 
 def _prepare_outgoing_text(text, kwargs):
@@ -583,7 +690,7 @@ def _prepare_outgoing_text(text, kwargs):
     return updated_text, kwargs
 
 
-def _prepare_inline_message_content(content):
+def _prepare_inline_message_content(content, rollback):
     if not isinstance(content, types.InputTextMessageContent):
         return content
 
@@ -595,19 +702,24 @@ def _prepare_inline_message_content(content):
     if not changed:
         return content
 
+    rollback.append((content, "message_text", content.message_text))
+    rollback.append((content, "parse_mode", parse_mode))
     content.message_text = updated_text
     content.parse_mode = "HTML"
     return content
 
 
-def _prepare_inline_result(result):
+def _prepare_inline_result(result, rollback):
     if hasattr(result, "caption"):
         updated_value, changed = apply_news_emoji(result.caption)
         if changed:
+            rollback.append((result, "caption", result.caption))
             result.caption = updated_value
 
     if hasattr(result, "input_message_content"):
-        result.input_message_content = _prepare_inline_message_content(result.input_message_content)
+        result.input_message_content = _prepare_inline_message_content(
+            result.input_message_content, rollback
+        )
     return result
 
 
@@ -616,32 +728,133 @@ _original_reply_to = bot.reply_to
 _original_edit_message_text = bot.edit_message_text
 _original_answer_inline_query = bot.answer_inline_query
 
+# Кастомные эмодзи доступны не каждому боту (Telegram отвечает 400 ENTITY_TEXT_INVALID /
+# CUSTOM_EMOJI_INVALID). Раньше такой ответ убивал отправку целиком, и бот молчал на любую
+# команду. Теперь первый отказ выключает подстановку и сообщение уходит обычным текстом.
+_CUSTOM_EMOJI_REJECTIONS = (
+    "entity_text_invalid",
+    "custom_emoji_invalid",
+    "custom emoji",
+)
+
+
+def _is_custom_emoji_rejection(exc):
+    if getattr(exc, "error_code", None) != 400:
+        return False
+    description = (getattr(exc, "description", "") or str(exc)).lower()
+    return any(marker in description for marker in _CUSTOM_EMOJI_REJECTIONS)
+
+
+# Одно неудачное сообщение — не повод гасить анимацию во всём боте: такой текст
+# уходит обычным, а подстановка остаётся. Отключаем только если отказы идут подряд,
+# то есть проблема системная (например, у бота нет прав на кастомные эмодзи).
+NEWS_EMOJI_FAILURE_STREAK = int(os.getenv("NEWS_EMOJI_FAILURE_STREAK", "10"))
+_news_emoji_failures = 0
+_news_emoji_lock = threading.Lock()
+
+
+def _note_news_emoji_success():
+    global _news_emoji_failures
+    if _news_emoji_failures:
+        with _news_emoji_lock:
+            _news_emoji_failures = 0
+
+
+def _disable_news_emoji(exc, text=None):
+    global _news_emoji_failures, _news_emoji_active
+    with _news_emoji_lock:
+        _news_emoji_failures += 1
+        streak = _news_emoji_failures
+        exhausted = _news_emoji_active and streak >= NEWS_EMOJI_FAILURE_STREAK
+        if exhausted:
+            _news_emoji_active = False
+
+    LOGGER.warning(
+        "Telegram отклонил кастомные эмодзи (%s), отказ %s подряд; текст: %.120r",
+        getattr(exc, "description", "") or exc,
+        streak,
+        text or "",
+    )
+    if exhausted:
+        LOGGER.error(
+            "Кастомные эмодзи отклонены %s раз подряд — подстановка tg-emoji отключена "
+            "до перезапуска, сообщения уходят обычным текстом",
+            streak,
+        )
+
 
 def send_message_with_news_emoji(chat_id, text, *args, **kwargs):
-    text, kwargs = _prepare_outgoing_text(text, dict(kwargs))
-    return _original_send_message(chat_id, text, *args, **kwargs)
+    prepared, prepared_kwargs = _prepare_outgoing_text(text, dict(kwargs))
+    try:
+        result = _original_send_message(chat_id, prepared, *args, **prepared_kwargs)
+    except ApiTelegramException as e:
+        if prepared == text or not _is_custom_emoji_rejection(e):
+            raise
+        _disable_news_emoji(e, prepared)
+        return _original_send_message(chat_id, text, *args, **prepared_kwargs)
+    if prepared != text:
+        _note_news_emoji_success()
+    return result
 
 
 def reply_to_with_news_emoji(message, text, *args, **kwargs):
-    text, kwargs = _prepare_outgoing_text(text, dict(kwargs))
+    prepared, prepared_kwargs = _prepare_outgoing_text(text, dict(kwargs))
+
+    def _send(body, call_kwargs):
+        try:
+            return _original_reply_to(message, body, *args, **call_kwargs)
+        except ApiTelegramException as e:
+            description = getattr(e, "description", "") or str(e)
+            if "message to be replied not found" in description.lower():
+                call_kwargs.pop("reply_parameters", None)
+                return _original_send_message(message.chat.id, body, *args, **call_kwargs)
+            raise
+
     try:
-        return _original_reply_to(message, text, *args, **kwargs)
+        result = _send(prepared, prepared_kwargs)
     except ApiTelegramException as e:
-        description = getattr(e, "description", "") or str(e)
-        if "message to be replied not found" in description.lower():
-            kwargs.pop("reply_parameters", None)
-            return _original_send_message(message.chat.id, text, *args, **kwargs)
-        raise
+        if prepared == text or not _is_custom_emoji_rejection(e):
+            raise
+        _disable_news_emoji(e, prepared)
+        return _send(text, prepared_kwargs)
+    if prepared != text:
+        _note_news_emoji_success()
+    return result
 
 
 def edit_message_text_with_news_emoji(text, chat_id=None, message_id=None, *args, **kwargs):
-    text, kwargs = _prepare_outgoing_text(text, dict(kwargs))
-    return _original_edit_message_text(text, chat_id=chat_id, message_id=message_id, *args, **kwargs)
+    prepared, prepared_kwargs = _prepare_outgoing_text(text, dict(kwargs))
+    try:
+        result = _original_edit_message_text(
+            prepared, chat_id=chat_id, message_id=message_id, *args, **prepared_kwargs
+        )
+    except ApiTelegramException as e:
+        if prepared == text or not _is_custom_emoji_rejection(e):
+            raise
+        _disable_news_emoji(e, prepared)
+        return _original_edit_message_text(
+            text, chat_id=chat_id, message_id=message_id, *args, **prepared_kwargs
+        )
+    if prepared != text:
+        _note_news_emoji_success()
+    return result
 
 
 def answer_inline_query_with_news_emoji(inline_query_id, results=None, *args, **kwargs):
-    prepared = [_prepare_inline_result(result) for result in (results or [])]
-    return _original_answer_inline_query(inline_query_id, prepared, *args, **kwargs)
+    rollback = []
+    prepared = [_prepare_inline_result(result, rollback) for result in (results or [])]
+    try:
+        result = _original_answer_inline_query(inline_query_id, prepared, *args, **kwargs)
+    except ApiTelegramException as e:
+        if not rollback or not _is_custom_emoji_rejection(e):
+            raise
+        _disable_news_emoji(e)
+        for target, attribute, original in reversed(rollback):
+            setattr(target, attribute, original)
+        return _original_answer_inline_query(inline_query_id, prepared, *args, **kwargs)
+    if rollback:
+        _note_news_emoji_success()
+    return result
 
 
 bot.send_message = send_message_with_news_emoji
@@ -1025,7 +1238,7 @@ GAME_TITLES = {**GAME_TITLES_LANG["ru"], "poker": "Покер"}
 SHOP_ITEMS = {
     "avatar_fire": {"name": "Аватар: Огонь", "type": "avatar", "value": "🔥", "price": 40},
     "avatar_star": {"name": "Аватар: Звезда", "type": "avatar", "value": "⭐", "price": 40},
-    "avatar_robot": {"name": "Аватар: Робот", "type": "avatar", "value": "tg://emoji?id=5372981976804366741", "price": 50},
+    "avatar_robot": {"name": "Аватар: Робот", "type": "avatar", "value": "🤖 ", "price": 50},
     "avatar_diamond": {"name": "Аватар: Даймонд", "type": "avatar", "value": "💎", "price": 120},
     "frame_gold": {"name": "Рамка: Золото", "type": "frame", "value": "gold", "price": 60},
     "frame_neon": {"name": "Рамка: Неон", "type": "frame", "value": "neon", "price": 70},
@@ -1034,7 +1247,7 @@ SHOP_ITEMS = {
     "theme_cyber": {"name": "Тема: Cyber", "type": "theme", "value": "cyber", "price": 80},
     "theme_news": {"name": "Тема: News", "type": "theme", "value": "news", "price": 100},
     "victory_crown": {"name": "Эффект победы: Корона", "type": "victory", "value": "👑", "price": 90},
-    "victory_trophy": {"name": "Эффект победы: Кубок", "type": "victory", "value": "tg://emoji?id=5409008750893734809", "price": 90},
+    "victory_trophy": {"name": "Эффект победы: Кубок", "type": "victory", "value": "🏆 ", "price": 90},
     "victory_confetti": {"name": "Эффект победы: Конфетти", "type": "victory", "value": "🎉", "price": 100},
 }
 
@@ -1505,8 +1718,8 @@ def _room_launch_kb(game_key):
 def _room_post_game_prompt(chat_id, code):
     kb = types.InlineKeyboardMarkup()
     kb.row(
-        types.InlineKeyboardButton("tg://emoji?id=5427009714745517609 Да", callback_data=f"room_continue_yes_{code}"),
-        types.InlineKeyboardButton("tg://emoji?id=5465665476971471368 Нет", callback_data=f"room_continue_no_{code}")
+        types.InlineKeyboardButton("✅ Да", callback_data=f"room_continue_yes_{code}"),
+        types.InlineKeyboardButton("❌ Нет", callback_data=f"room_continue_no_{code}")
     )
     try:
         msg = bot.send_message(chat_id, "🔁 Продолжаем?", reply_markup=kb)
@@ -1589,7 +1802,7 @@ def _room_finalize_vote(code):
     try:
         msg1 = bot.send_message(
             room["chat_id"],
-            f"tg://emoji?id=5427009714745517609 Выбрана игра: {GAME_TITLES.get(chosen_key, chosen_key)}\n\n{_room_game_start_text(chosen_key)}",
+            f"✅ Выбрана игра: {GAME_TITLES.get(chosen_key, chosen_key)}\n\n{_room_game_start_text(chosen_key)}",
             parse_mode="HTML"
         )
         _room_track_message_id(room["chat_id"], getattr(msg1, "message_id", None))
@@ -1704,10 +1917,10 @@ def _shop_render_text(uid):
         "",
     ]
     sections = {
-        "avatar": "tg://emoji?id=5373012449597335010 Аватары",
+        "avatar": "👤 Аватары",
         "frame": "💎 Рамки",
-        "theme": "tg://emoji?id=5369752984382456789 Темы",
-        "victory": "tg://emoji?id=5409008750893734809 Победные эффекты",
+        "theme": "⚙️ Темы",
+        "victory": "🏆 Победные эффекты",
     }
     for item_type, title in sections.items():
         lines.append(title)
@@ -2316,7 +2529,7 @@ def _quiz_new_game(qdata, owner_id, owner_name):
 def _quiz_intro_text(question):
     return (
         "🧠 *Викторина*\n\n"
-        f"tg://emoji?id=5467666648263564704 {question}\n\n"
+        f"❓ {question}\n\n"
         "Кто ответит первым правильно - выигрывает!"
     )
 
@@ -2342,7 +2555,7 @@ def _quiz_input_kb(gid):
     kb.row(*[types.InlineKeyboardButton(str(i), callback_data=f"quiz_{gid}_{i}") for i in range(10)])
     kb.row(
         types.InlineKeyboardButton("⌫", callback_data=f"quiz_{gid}_back"),
-        types.InlineKeyboardButton("tg://emoji?id=5427009714745517609 Готово", callback_data=f"quiz_{gid}_submit"),
+        types.InlineKeyboardButton("✅ Готово", callback_data=f"quiz_{gid}_submit"),
     )
     return kb
 
@@ -2350,10 +2563,10 @@ def _quiz_input_kb(gid):
 def _quiz_status_text(game, footer):
     players = game["players"]
     text = "🧠 *Викторина*\n\n"
-    text += f"tg://emoji?id=5467666648263564704 {game['question']}\n\n"
+    text += f"❓ {game['question']}\n\n"
     text += f"Игроки ({len(players)}/{game.get('max_players', 4)}):\n\n"
     for pid in players:
-        status = "tg://emoji?id=5427009714745517609 ответ готов" if game["answered"].get(pid) else "⌨️ вводит"
+        status = "✅ ответ готов" if game["answered"].get(pid) else "⌨️ вводит"
         text += f"- {game['names'].get(pid, 'Игрок')}: {status}\n\n"
     return text + footer
 
@@ -2945,7 +3158,7 @@ def _wordle_render_text(game):
     elif game.get("status") == "lost":
         text += f"\n\n💀 Поражение. Слово: {game.get('target','').upper()}"
     else:
-        text += "\n\nВведите слово из 5 букв и нажмите «tg://emoji?id=5427009714745517609 Готово»."
+        text += "\n\nВведите слово из 5 букв и нажмите «✅ Готово»."
     return text
 
 def _wordle_keyboard(gid, game):
@@ -2958,7 +3171,7 @@ def _wordle_keyboard(gid, game):
         kb.row(*[types.InlineKeyboardButton(ch.upper(), callback_data=f"wrdl_l_{gid}_{ch}") for ch in row])
     kb.row(
         types.InlineKeyboardButton("⌫", callback_data=f"wrdl_back_{gid}"),
-        types.InlineKeyboardButton("tg://emoji?id=5427009714745517609 Готово", callback_data=f"wrdl_submit_{gid}")
+        types.InlineKeyboardButton("✅ Готово", callback_data=f"wrdl_submit_{gid}")
     )
     return kb
 
@@ -3148,9 +3361,9 @@ def telos_main_menu():
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("📁 Файлы", callback_data="os_files"),
            types.InlineKeyboardButton("📝 Заметки", callback_data="os_notes"))
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5467583879948803288 Игры", callback_data="os_games"),
-           types.InlineKeyboardButton("tg://emoji?id=5465300082628763143 Терминал", callback_data="os_terminal"))
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5369752984382456789 Настройки", callback_data="os_settings"))
+    kb.add(types.InlineKeyboardButton("🎮 Игры", callback_data="os_games"),
+           types.InlineKeyboardButton("💬 Терминал", callback_data="os_terminal"))
+    kb.add(types.InlineKeyboardButton("⚙️ Настройки", callback_data="os_settings"))
     kb.add(types.InlineKeyboardButton("⏻ Выключить", callback_data="os_shutdown"))
     return kb
 
@@ -3198,7 +3411,7 @@ def _telos_home_text(user_id):
     st = _telos_get_state(user_id)
     return (
         f"🖥 *{st['settings'].get('os_name', 'TELOS')} v1.1*\n"
-        f"tg://emoji?id=5373012449597335010 ID пользователя: `{user_id}`\n\n"
+        f"👤 ID пользователя: `{user_id}`\n\n"
         f"📁 Файлов: {len(st.get('files', []))}\n"
         f"📝 Заметок: {len(st.get('notes', []))}\n"
         f"🎨 Тема: {st['settings'].get('theme', 'classic')}\n\n"
@@ -3230,7 +3443,7 @@ def _telos_notes_kb(st):
 def _telos_terminal_kb():
     kb = types.InlineKeyboardMarkup()
     kb.row(
-        types.InlineKeyboardButton("tg://emoji?id=5467666648263564704 Помощь", callback_data="os_term_help"),
+        types.InlineKeyboardButton("❓ Помощь", callback_data="os_term_help"),
         types.InlineKeyboardButton("🕒 Дата", callback_data="os_term_date"),
         types.InlineKeyboardButton("⏱ Аптайм", callback_data="os_term_uptime"),
     )
@@ -3264,7 +3477,7 @@ def _telos_games_kb():
         types.InlineKeyboardButton("✂ КНБ", callback_data="os_game_rps"),
         types.InlineKeyboardButton("🔢 Угадай число", callback_data="os_game_guess"),
     )
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5467918917462688479 Кубик", callback_data="os_game_dice"))
+    kb.add(types.InlineKeyboardButton("🚪 Кубик", callback_data="os_game_dice"))
     kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="os_back"))
     return kb
 
@@ -3371,7 +3584,7 @@ def ask_ai(prompt: str, user_id: int) -> str:
             break
 
     LOGGER.error("AI FINAL ERROR: %r", last_err)
-    return "tg://emoji?id=5465665476971471368 Временная ошибка AI-сервиса. Нажмите «Обновить» или «Получить ответ» ещё раз."
+    return "❌ Временная ошибка AI-сервиса. Нажмите «Обновить» или «Получить ответ» ещё раз."
 
 def _user_display_name_from_id(uid):
     try:
@@ -3380,7 +3593,7 @@ def _user_display_name_from_id(uid):
     except Exception:
         return f"Player_{uid}"
 
-TTT_X = "tg://emoji?id=5465665476971471368"
+TTT_X = "❌ "
 TTT_SYMBOLS = {" ": "⬜️", TTT_X: TTT_X, "⭕": "⭕️"}
 TTT_WIN_PATTERNS = (
     (0, 1, 2), (3, 4, 5), (6, 7, 8),
@@ -3456,7 +3669,7 @@ def _find_waiting_text(uid):
 
 def _find_waiting_kb():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5465665476971471368 Отменить поиск", callback_data="find_cancel"))
+    kb.add(types.InlineKeyboardButton("❌ Отменить поиск", callback_data="find_cancel"))
     return kb
 
 
@@ -3465,7 +3678,7 @@ def _find_vote_text(match, chosen_game=None):
     n1 = match["names"].get(p1, "Игрок 1")
     n2 = match["names"].get(p2, "Игрок 2")
     lines = [
-        "tg://emoji?id=5467583879948803288 Игрок найден!",
+        "🎮 Игрок найден!",
         "",
         f"{n1} vs {n2}",
         "",
@@ -3955,10 +4168,10 @@ def topusers_cmd(message):
 
     rows.sort(key=lambda x: (-x[0], x[1].lower()))
     top = rows[:15]
-    text = "tg://emoji?id=5409008750893734809 *Топ пользователей по серии*\n"
+    text = "🏆 *Топ пользователей по серии*\n"
     text += "_Серия считается по дням активности в боте._\n\n"
     for i, (streak, name, last_day) in enumerate(top, 1):
-        status = "tg://emoji?id=5427009714745517609 сегодня" if last_day == today else "⌛ вчера"
+        status = "✅ сегодня" if last_day == today else "⌛ вчера"
         text += f"{i}. {name} — {streak} дн. ({status})\n"
 
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
@@ -4065,8 +4278,8 @@ def shop_callbacks(call):
 
 def _admin_panel_kb():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5431577498364158238 Сводка", callback_data="admin_stats"))
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5372926953978341366 Все игроки", callback_data="admin_users"))
+    kb.add(types.InlineKeyboardButton("📊 Сводка", callback_data="admin_stats"))
+    kb.add(types.InlineKeyboardButton("👥 Все игроки", callback_data="admin_users"))
     kb.add(types.InlineKeyboardButton("📈 Популярные игры", callback_data="admin_games"))
     kb.add(types.InlineKeyboardButton("💰 Топ по монетам", callback_data="admin_coins"))
     kb.add(types.InlineKeyboardButton("🏠 Комнаты", callback_data="admin_rooms"))
@@ -4074,7 +4287,7 @@ def _admin_panel_kb():
     kb.add(types.InlineKeyboardButton("⛔ Бан", callback_data="admin_ban_user"))
     kb.add(types.InlineKeyboardButton("✅ Разбан", callback_data="admin_unban_user"))
     kb.add(types.InlineKeyboardButton("💾 Backup", callback_data="admin_backup"))
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5409008750893734809 Достижения", callback_data="admin_achievements"))
+    kb.add(types.InlineKeyboardButton("🏆 Достижения", callback_data="admin_achievements"))
     kb.add(types.InlineKeyboardButton("📣 Рассылка", callback_data="admin_broadcast"))
     return kb
 
@@ -4087,7 +4300,7 @@ def _broadcast_menu_kb():
     return kb
 
 def _send_broadcast_menu(chat_id):
-    bot.send_message(chat_id, "tg://emoji?id=5369752984382456789 Настройки рассылки — выберите действие:", reply_markup=_broadcast_menu_kb())
+    bot.send_message(chat_id, "⚙️ Настройки рассылки — выберите действие:", reply_markup=_broadcast_menu_kb())
 
 @bot.message_handler(commands=["adminpanel"])
 def admin_panel_cmd(message):
@@ -4167,9 +4380,9 @@ def admin_panel_callbacks(call):
         pool_count = len(rooms.get("pool", []) or [])
         active_count = len(rooms.get("active", {}) or {})
         text = (
-            "tg://emoji?id=5431577498364158238 Сводка\n\n"
-            f"tg://emoji?id=5372926953978341366 Пользователей: {total_users}\n"
-            f"tg://emoji?id=5467583879948803288 Сыграно игр: {total_games}\n"
+            "📊 Сводка\n\n"
+            f"👥 Пользователей: {total_users}\n"
+            f"🎮 Сыграно игр: {total_games}\n"
             f"🪙 Монет в системе: {total_coins}\n"
             f"💎 Премиум активен: {premium_count}\n"
             f"🏠 Комнаты: активные {active_count}, пул {pool_count}\n"
@@ -4187,7 +4400,7 @@ def admin_panel_callbacks(call):
             name = rec.get("display_name") or f"user_{uid_str}"
             rows.append((total, str(name), uid_str))
         rows.sort(key=lambda x: (-x[0], x[1].lower()))
-        text = f"tg://emoji?id=5372926953978341366 Всего пользователей: {len(users)}\n\n"
+        text = f"👥 Всего пользователей: {len(users)}\n\n"
         if rows:
             text += "Топ по сыгранным играм:\n"
             for i, (total, name, uid_str) in enumerate(rows[:20], 1):
@@ -4290,7 +4503,7 @@ def admin_panel_callbacks(call):
             for key in counts.keys():
                 if key in ach:
                     counts[key] += 1
-        text = "tg://emoji?id=5409008750893734809 Достижения (кол-во открытий):\n\n"
+        text = "🏆 Достижения (кол-во открытий):\n\n"
         for key, meta in ACHIEVEMENTS.items():
             text += f"• {meta['title']}: {counts.get(key, 0)}\n"
         safe_edit_message(call, text, reply_markup=_admin_panel_kb())
@@ -4428,7 +4641,7 @@ def messagenot_type_choice(call):
             except Exception:
                 pass
             bot.answer_callback_query(call.id, "Готово — кнопка будет убрана из рассылки.")
-            bot.send_message(uid, "tg://emoji?id=5427009714745517609 Тип кнопки: без кнопки. При рассылке кнопка не будет отображаться.")
+            bot.send_message(uid, "✅ Тип кнопки: без кнопки. При рассылке кнопка не будет отображаться.")
             return
     except Exception as e:
         log_exception("type_choice", e)
@@ -4445,7 +4658,7 @@ def broadcast_open(call):
 @bot.message_handler(commands=["mode"])
 def set_mode(message):
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5465300082628763143 Чат", callback_data="mode_chat"))
+    kb.add(types.InlineKeyboardButton("💬 Чат", callback_data="mode_chat"))
     kb.add(types.InlineKeyboardButton("⚡ Кратко", callback_data="mode_short"))
     kb.add(types.InlineKeyboardButton("🧠 Подробно", callback_data="mode_long"))
     kb.add(types.InlineKeyboardButton("💻 Код", callback_data="mode_code"))
@@ -4464,14 +4677,14 @@ def mode_callback(call):
         user_ai_mode[uid] = mode
         
         mode_names = {
-            "chat": "tg://emoji?id=5465300082628763143 Чат",
+            "chat": "💬 Чат",
             "short": "⚡ Кратко",
             "long": "🧠 Подробно",
             "code": "💻 Код"
         }
         
-        bot.answer_callback_query(call.id, f"tg://emoji?id=5427009714745517609 Режим выбран: {mode_names.get(mode, mode)}")
-        bot.edit_message_text(f"tg://emoji?id=5427009714745517609 Выбран режим: {mode_names.get(mode, mode)}", inline_message_id=call.inline_message_id)
+        bot.answer_callback_query(call.id, f"✅ Режим выбран: {mode_names.get(mode, mode)}")
+        bot.edit_message_text(f"✅ Выбран режим: {mode_names.get(mode, mode)}", inline_message_id=call.inline_message_id)
     except Exception as e:
         log_exception("mode_callback", e)
         bot.answer_callback_query(call.id, "Ошибка")
@@ -4496,7 +4709,7 @@ INLINE_HINT_BUTTONS = {
     "💰 Миллионер": "играть в миллионер",
     "🟢 Wordle": "играть в Wordle",
     "♟ Шахматы": "играть в шахматы",
-    "tg://emoji?id=5465300082628763143 Режим ИИ": "использовать режим ИИ",
+    "💬 Режим ИИ": "использовать режим ИИ",
     "🐣 Пасхалка": "запустить анимацию пасхалки",
     "🪙 Орёл или решка": "играть в орёл или решка",
     "🔢 Угадай число": "играть в угадай число",
@@ -4529,7 +4742,7 @@ def bot_info(message):
         "а также использовать дополнительные функции: профиль, поддержку и рассылку.",
     )
 
-@bot.message_handler(func=lambda m: m.text == "tg://emoji?id=5334882760735598374 Скопировать username")
+@bot.message_handler(func=lambda m: m.text == "🏠 Скопировать username")
 def copy_bot_username(message):
     bot.send_message(
         message.chat.id,
@@ -4550,7 +4763,7 @@ def bot_instruction(message):
         parse_mode="HTML",
     )
 
-@bot.message_handler(func=lambda m: m.text == "tg://emoji?id=5373012449597335010 Профиль")
+@bot.message_handler(func=lambda m: m.text == "👤 Профиль")
 def profile_button(message):
     uid = message.from_user.id
     update_user_streak(uid, message.from_user.first_name or message.from_user.username or str(uid))
@@ -4606,7 +4819,7 @@ def start_info_callbacks(call):
         except Exception:
             pass
 
-@bot.message_handler(func=lambda m: m.text == "tg://emoji?id=5242628160297641831 Ваше уведомление")
+@bot.message_handler(func=lambda m: m.text == "🔔 Ваше уведомление")
 def notification(message):
     bot.send_message(message.chat.id, "Чтобы настроить системное уведомление - напишите <code>/settext</code>", parse_mode="HTML")
 
@@ -4647,7 +4860,7 @@ def flappybird(message):
 def connect(message):
     bot.send_message(
         message.chat.id,
-        "tg://emoji?id=5369752984382456789 <b>Подключение через Telegram Business</b>\n\n"
+        "⚙️ <b>Подключение через Telegram Business</b>\n\n"
         "ВНИМАНИЕ! Сейчас в разработке!\n"
         "AI-функции в business-режиме отключены.\n\n"
         "<b>Доступные игры (этап 1):</b>\n"
@@ -4670,14 +4883,14 @@ def _support_text():
 
 def _support_menu_kb():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("tg://emoji?id=5465300082628763143 Написать модератору", callback_data="support_mode_moderator"))
+    kb.add(types.InlineKeyboardButton("💬 Написать модератору", callback_data="support_mode_moderator"))
     kb.add(types.InlineKeyboardButton("🐞 Отправить проблему", callback_data="support_mode_issue"))
     return kb
 
 def _support_mode_prompt(mode):
     if mode == "moderator":
         return (
-            "tg://emoji?id=5465300082628763143 Режим: написать модератору.\n"
+            "💬 Режим: написать модератору.\n"
             "Отправьте сообщение одним текстом.\n"
             "Для отмены: /cancelsupport"
         )
@@ -4694,8 +4907,8 @@ def _start_info_kb():
         types.InlineKeyboardButton("📖 Инструкция", callback_data="start_instruction"),
     )
     kb.row(
-        types.InlineKeyboardButton("tg://emoji?id=5334882760735598374 Скопировать юзернейм", callback_data="start_username"),
-        types.InlineKeyboardButton("tg://emoji?id=5373012449597335010 Профиль", callback_data="start_profile"),
+        types.InlineKeyboardButton("🏠 Скопировать юзернейм", callback_data="start_username"),
+        types.InlineKeyboardButton("👤 Профиль", callback_data="start_profile"),
     )
     kb.row(
         types.InlineKeyboardButton("🛍 Магазин", callback_data="start_shop"),
@@ -4741,7 +4954,7 @@ def support_mode_callback(call):
 @bot.message_handler(commands=["cancelsupport"])
 def cancel_support_chat(message):
     support_chat_wait.pop(message.from_user.id, None)
-    bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Режим поддержки отменён.")
+    bot.send_message(message.chat.id, "❌ Режим поддержки отменён.")
 
 @bot.message_handler(commands=["reply"])
 def support_admin_reply(message):
@@ -4762,10 +4975,10 @@ def support_admin_reply(message):
         bot.send_message(message.chat.id, "Текст ответа пуст.")
         return
     try:
-        bot.send_message(target_uid, f"tg://emoji?id=5465300082628763143 Ответ поддержки:\n{reply_text}")
-        bot.send_message(message.chat.id, f"tg://emoji?id=5427009714745517609 Ответ отправлен пользователю {target_uid}.")
+        bot.send_message(target_uid, f"💬 Ответ поддержки:\n{reply_text}")
+        bot.send_message(message.chat.id, f"✅ Ответ отправлен пользователю {target_uid}.")
     except Exception:
-        bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Не удалось отправить ответ пользователю.")
+        bot.send_message(message.chat.id, "❌ Не удалось отправить ответ пользователю.")
 
 @bot.message_handler(func=lambda m: m.text == "🚀 Поддержать автора")
 def support_donate(message):
@@ -4777,7 +4990,7 @@ def achievements_cmd(message):
         return
     bot.send_message(message.chat.id, _render_achievements_text(message.from_user.id))
 
-@bot.message_handler(func=lambda m: m.text == "tg://emoji?id=5409008750893734809 Достижения")
+@bot.message_handler(func=lambda m: m.text == "🏆 Достижения")
 def achievements_btn(message):
     if not _guard_user(message.from_user.id, chat_id=message.chat.id, action="achievements"):
         return
@@ -4814,7 +5027,7 @@ def room_register_cmd(message):
         bot.set_chat_title(message.chat.id, rooms.get("free_title", ROOM_FREE_TITLE))
     except Exception:
         pass
-    bot.send_message(message.chat.id, "tg://emoji?id=5427009714745517609 Группа зарегистрирована как пати. Статус: свободно.")
+    bot.send_message(message.chat.id, "✅ Группа зарегистрирована как пати. Статус: свободно.")
 
 @bot.message_handler(commands=["room_unregister", "party_unregister"])
 def room_unregister_cmd(message):
@@ -4830,7 +5043,7 @@ def room_unregister_cmd(message):
         pool = [cid for cid in pool if cid != message.chat.id]
         rooms["pool"] = pool
         save_data(d)
-        bot.send_message(message.chat.id, "tg://emoji?id=5427009714745517609 Группа удалена из пула комнат.")
+        bot.send_message(message.chat.id, "✅ Группа удалена из пула комнат.")
     else:
         bot.send_message(message.chat.id, "ℹ️ Эта группа не зарегистрирована.")
 
@@ -4874,7 +5087,7 @@ def party_create_cmd(message):
     d, rooms = _rooms_get_data()
     chat_id = _room_pick_free_chat(rooms)
     if not chat_id:
-        bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Нет свободных групп. Попробуйте через 5 минут.")
+        bot.send_message(message.chat.id, "❌ Нет свободных групп. Попробуйте через 5 минут.")
         return
     code = _room_generate_code(rooms)
     creator = message.from_user
@@ -4915,13 +5128,13 @@ def party_create_cmd(message):
             save_data(d3)
         bot.send_message(
             message.chat.id,
-            f"tg://emoji?id=5427009714745517609 Пати создан!\nКод: {code}\nСсылка для входа: {invite_link}\n"
+            f"✅ Пати создан!\nКод: {code}\nСсылка для входа: {invite_link}\n"
             "В группе запускается голосование за игру."
         )
     else:
         bot.send_message(
             message.chat.id,
-            f"tg://emoji?id=5427009714745517609 Пати создан!\nКод: {code}\n"
+            f"✅ Пати создан!\nКод: {code}\n"
             "Не удалось создать ссылку — проверьте права бота в группе."
         )
 
@@ -4956,10 +5169,10 @@ def room_join_cmd(message):
     d, rooms = _rooms_get_data()
     room = rooms.get("active", {}).get(code)
     if not isinstance(room, dict):
-        bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Пати с таким кодом не найден.")
+        bot.send_message(message.chat.id, "❌ Пати с таким кодом не найден.")
         return
     if time.time() > float(room.get("ends_at") or 0):
-        bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Пати уже закрыто.")
+        bot.send_message(message.chat.id, "❌ Пати уже закрыто.")
         return
     chat_id = room.get("chat_id")
     invite_link = room.get("invite_link")
@@ -4974,9 +5187,9 @@ def room_join_cmd(message):
             rooms["active"][code] = room
             save_data(d)
     if invite_link:
-        bot.send_message(message.chat.id, f"tg://emoji?id=5427009714745517609 Вход по коду {code}:\n{invite_link}")
+        bot.send_message(message.chat.id, f"✅ Вход по коду {code}:\n{invite_link}")
     else:
-        bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Не удалось создать ссылку. Проверьте права бота в группе.")
+        bot.send_message(message.chat.id, "❌ Не удалось создать ссылку. Проверьте права бота в группе.")
     room_participants.setdefault(chat_id, set()).add(message.from_user.id)
     if isinstance(room.get("participants", []), list) and message.from_user.id not in room.get("participants", []):
         room["participants"].append(message.from_user.id)
@@ -5312,7 +5525,7 @@ def minesweeper_message(message):
     _record_game_play(uid, "minesweeper", display_name=message.from_user.first_name or message.from_user.username or str(uid), session_id=f"chat_{message.chat.id}_{int(time.time())}")
     start_minesweeper_in_chat(message.chat.id)
 
-@bot.message_handler(func=lambda m: m.text == "tg://emoji?id=5467583879948803288 Играть")
+@bot.message_handler(func=lambda m: m.text == "🎮 Играть")
 def play(message):
     bot.send_message(message.chat.id, f"Чтобы играть — используй инлайн через @{INLINE_BOT_USERNAME} в любом чате!")
 
@@ -5321,18 +5534,18 @@ def _ai_prompt_status_text(status):
     mapping = {
         "wait": "⏳ ожидание..",
         "process": "⏳ ответ генерируется..",
-        "done": "tg://emoji?id=5427009714745517609 готово",
+        "done": "✅ готово",
     }
     return mapping.get(status, "⏳ ожидание..")
 
 
 def _ai_prompt_message(question, status, answer=None):
     text = (
-        f"tg://emoji?id=5465300082628763143 Вопрос:\n{str(question or '').strip()}\n\n"
+        f"💬 Вопрос:\n{str(question or '').strip()}\n\n"
         f"Статус: {_ai_prompt_status_text(status)}"
     )
     if status == "done":
-        text += "\n\ntg://emoji?id=5372981976804366741 Ответ:\n" + str(answer or "")
+        text += "\n\n🤖 Ответ:\n" + str(answer or "")
     return text
 
 
@@ -5365,8 +5578,8 @@ def ai_inline(query):
         game = battleship_games[bgid] = _bship_new_game(uid, display_name)
         result = types.InlineQueryResultArticle(
             id=f"bship_{bgid}",
-            title="🚢 Морской бой",
-            description="Пошаговая игра на двоих",
+            title=f"🚢 {get_game_title(uid, 'bship')}",
+            description=get_game_description(uid, "bship"),
             input_message_content=types.InputTextMessageContent(_bship_public_text(game)),
             reply_markup=_bship_public_keyboard(bgid, game),
         )
@@ -5378,8 +5591,8 @@ def ai_inline(query):
         game = chess_games[cgid] = _chess_new_game(uid, display_name)
         result = types.InlineQueryResultArticle(
             id=f"chess_{cgid}",
-            title="♟ Шахматы",
-            description="Классические шахматы 1 на 1",
+            title=f"♟ {get_game_title(uid, 'chess')}",
+            description=get_game_description(uid, "chess"),
             input_message_content=types.InputTextMessageContent(_chess_render_text(game)),
             reply_markup=_chess_keyboard(cgid, game),
         )
@@ -5392,7 +5605,7 @@ def ai_inline(query):
             query.id,
             [types.InlineQueryResultArticle(
                 id="nope",
-                title="⚠️ Лимит",
+                title=localized_text(uid, "⚠️ Лимит", "⚠️ Limit", "⚠️ Ліміт"),
                 input_message_content=types.InputTextMessageContent(err)
             )],
             cache_time=1,
@@ -5407,7 +5620,7 @@ def ai_inline(query):
 
     result = types.InlineQueryResultArticle(
         id=req_id,
-        title="tg://emoji?id=5372981976804366741 Спросить ChatGPT",
+        title=localized_text(uid, "🤖 Спросить ChatGPT", "🤖 Ask ChatGPT", "🤖 Запитати ChatGPT"),
         description=text[:60],
         input_message_content=types.InputTextMessageContent(_ai_prompt_message(text, "wait")),
         reply_markup=_ai_prompt_kb(uid, req_id)
@@ -5421,7 +5634,8 @@ def inline_handler(query):
         if not _inline_guard(query):
             return
         user = query.from_user
-        user_name = html.escape(user.first_name or "Игрок")
+        uid = user.id
+        user_name = html.escape(user.first_name or localized_text(uid, "Игрок", "Player", "Гравець"))
         starter_id = user.id
         results = []
 
@@ -5430,16 +5644,21 @@ def inline_handler(query):
         rps_games[rgid] = {"uid": starter_id}
         rps_markup = types.InlineKeyboardMarkup()
         rps_markup.row(
-            types.InlineKeyboardButton("🪨 Камень", callback_data=f"rps_{rgid}_rock"),
-            types.InlineKeyboardButton("📄 Бумага", callback_data=f"rps_{rgid}_paper"),
-            types.InlineKeyboardButton("✂️ Ножницы", callback_data=f"rps_{rgid}_scissors")
+            types.InlineKeyboardButton(localized_text(uid, "🪨 Камень", "🪨 Rock", "🪨 Камінь"), callback_data=f"rps_{rgid}_rock"),
+            types.InlineKeyboardButton(localized_text(uid, "📄 Бумага", "📄 Paper", "📄 Папір"), callback_data=f"rps_{rgid}_paper"),
+            types.InlineKeyboardButton(localized_text(uid, "✂️ Ножницы", "✂️ Scissors", "✂️ Ножиці"), callback_data=f"rps_{rgid}_scissors")
         )
         results.append(types.InlineQueryResultArticle(
             id=f"rps_{rgid}",
-            title="✂ Камень-ножницы-бумага",
-            description="Сыграйте против бота",
+            title=f"✂ {get_game_title(uid, 'rps')}",
+            description=get_game_description(uid, "rps"),
             input_message_content=types.InputTextMessageContent(
-                "✂️ *Камень • Ножницы • Бумага*\nВыберите ход:",
+                localized_text(
+                    uid,
+                    "✂️ *Камень • Ножницы • Бумага*\nВыберите ход:",
+                    "✂️ *Rock • Paper • Scissors*\nChoose your move:",
+                    "✂️ *Камінь • Ножиці • Папір*\nОберіть хід:",
+                ),
                 parse_mode="Markdown"
             ),
             reply_markup=rps_markup
@@ -5448,11 +5667,18 @@ def inline_handler(query):
 
         # Крестики-нолики
         join_markup = types.InlineKeyboardMarkup()
-        join_markup.add(types.InlineKeyboardButton("Присоединиться ⭕", callback_data=f"ttt_join_{starter_id}"))
-        ttext = f"tg://emoji?id=5467583879948803288 Крестики-нолики\ntg://emoji?id=5465665476971471368 {user_name}\n⭕ — (ожидается)\nНажмите «Присоединиться ⭕», чтобы начать."
+        join_markup.add(types.InlineKeyboardButton(
+            localized_text(uid, "Присоединиться ⭕", "Join ⭕", "Приєднатися ⭕"),
+            callback_data=f"ttt_join_{starter_id}"))
+        ttext = localized_text(
+            uid,
+            f"🎮 {get_game_title(uid, 'ttt')}\n❌ {user_name}\n⭕ — (ожидается)\nНажмите «Присоединиться ⭕», чтобы начать.",
+            f"🎮 {get_game_title(uid, 'ttt')}\n❌ {user_name}\n⭕ — (waiting)\nPress «Join ⭕» to start.",
+            f"🎮 {get_game_title(uid, 'ttt')}\n❌ {user_name}\n⭕ — (очікується)\nНатисніть «Приєднатися ⭕», щоб почати.",
+        )
         results.append(types.InlineQueryResultArticle(
-            id=f"ttt_{short_id()}", title="tg://emoji?id=5465665476971471368 Крестики-нолики",
-            description="Крестики-нолики на 2 игрока",
+            id=f"ttt_{short_id()}", title=f"❌ {get_game_title(uid, 'ttt')}",
+            description=get_game_description(uid, "ttt"),
             input_message_content=types.InputTextMessageContent(message_text=ttext, parse_mode="HTML"),
             reply_markup=join_markup))
 
@@ -5464,31 +5690,40 @@ def inline_handler(query):
             markup_m.add(types.InlineKeyboardButton(opt, callback_data=f"millionaire_{gid}_{i}"))
         results.append(types.InlineQueryResultArticle(
             id=f"millionaire_{gid}",
-            title="💰 Миллионер",
-            description="Ответьте на вопрос и проверьте свои знания",
-            input_message_content=types.InputTextMessageContent(f"💰 {qdata['question']}\nОсталось попыток: 3"),
+            title=f"💰 {get_game_title(uid, 'millionaire')}",
+            description=get_game_description(uid, "millionaire"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                f"💰 {qdata['question']}\nОсталось попыток: 3",
+                f"💰 {qdata['question']}\nAttempts left: 3",
+                f"💰 {qdata['question']}\nЗалишилось спроб: 3",
+            )),
             reply_markup=markup_m
         ))
 
         if user_show_easter_egg.get(starter_id, False):
             egg_markup = types.InlineKeyboardMarkup()
-            egg_markup.add(types.InlineKeyboardButton("🐣 Пасхалка", callback_data="easter_egg"))
+            egg_markup.add(types.InlineKeyboardButton(
+                localized_text(uid, "🐣 Пасхалка", "🐣 Easter egg", "🐣 Пасхалка"), callback_data="easter_egg"))
             results.append(types.InlineQueryResultArticle(
                 id=f"egg_{short_id()}",
-                title="🐣 Пасхалка",
-                description="Анимация",
-                input_message_content=types.InputTextMessageContent("🐣 Нажмите кнопку ниже"),
+                title=localized_text(uid, "🐣 Пасхалка", "🐣 Easter egg", "🐣 Пасхалка"),
+                description=localized_text(uid, "Анимация", "Animation", "Анімація"),
+                input_message_content=types.InputTextMessageContent(
+                    localized_text(uid, "🐣 Нажмите кнопку ниже", "🐣 Press the button below", "🐣 Натисніть кнопку нижче")),
                 reply_markup=egg_markup
             ))
 
         # Орёл или решка
         coin_m = types.InlineKeyboardMarkup()
-        coin_m.add(types.InlineKeyboardButton("Бросить 🪙", callback_data="coin_flip"))
+        coin_m.add(types.InlineKeyboardButton(
+            localized_text(uid, "Бросить 🪙", "Flip 🪙", "Кинути 🪙"), callback_data="coin_flip"))
         results.append(types.InlineQueryResultArticle(
             id=f"coin_{short_id()}",
-            title="🪙 Орёл или решка",
-            description="Рандомный выбор между орлом и решкой",
-            input_message_content=types.InputTextMessageContent("🪙 Орёл или решка?"),
+            title=f"🪙 {get_game_title(uid, 'coin')}",
+            description=get_game_description(uid, "coin"),
+            input_message_content=types.InputTextMessageContent(
+                localized_text(uid, "🪙 Орёл или решка?", "🪙 Heads or tails?", "🪙 Орел чи решка?")),
             reply_markup=coin_m
         ))
 
@@ -5498,8 +5733,8 @@ def inline_handler(query):
         wordle_games[wgid] = wgame
         results.append(types.InlineQueryResultArticle(
             id=f"wordle_{wgid}",
-            title="🟩 Wordle",
-            description="Угадайте слово из 5 букв за 6 попыток",
+            title=f"🟩 {get_game_title(uid, 'wordle')}",
+            description=get_game_description(uid, "wordle"),
             input_message_content=types.InputTextMessageContent(_wordle_render_text(wgame)),
             reply_markup=_wordle_keyboard(wgid, wgame)
         ))
@@ -5508,12 +5743,18 @@ def inline_handler(query):
         rgid = short_id()
         reaction_games[rgid] = {"uid": starter_id, "chat_id": None, "started": False, "start_at": None, "msg_id": None, "inline_id": None}
         rmarkup = types.InlineKeyboardMarkup()
-        rmarkup.add(types.InlineKeyboardButton("▶️ Начать", callback_data=f"reaction_begin_{rgid}"))
+        rmarkup.add(types.InlineKeyboardButton(
+            localized_text(uid, "▶️ Начать", "▶️ Start", "▶️ Почати"), callback_data=f"reaction_begin_{rgid}"))
         results.append(types.InlineQueryResultArticle(
             id=f"reaction_{rgid}",
-            title="⚡ Блиц-реакция",
-            description="Проверка скорости реакции",
-            input_message_content=types.InputTextMessageContent("⚡ Блиц-реакция\nНажмите «Начать», затем ждите сигнал."),
+            title=f"⚡ {get_game_title(uid, 'reaction')}",
+            description=get_game_description(uid, "reaction"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                "⚡ Блиц-реакция\nНажмите «Начать», затем ждите сигнал.",
+                "⚡ Reaction blitz\nPress «Start», then wait for the signal.",
+                "⚡ Бліц-реакція\nНатисніть «Почати», потім чекайте на сигнал.",
+            )),
             reply_markup=rmarkup
         ))
 
@@ -5523,8 +5764,8 @@ def inline_handler(query):
         blackjack_games[bjid] = bjstate
         results.append(types.InlineQueryResultArticle(
             id=f"blackjack_{bjid}",
-            title="🃏 Блэкджек",
-            description="Карты против дилера",
+            title=f"🃏 {get_game_title(uid, 'blackjack')}",
+            description=get_game_description(uid, "blackjack"),
             input_message_content=types.InputTextMessageContent(_bj_render_text(bjstate, reveal_dealer=bjstate.get("status") != "playing")),
             reply_markup=_bj_keyboard(bjid, bjstate.get("status"))
         ))
@@ -5534,8 +5775,8 @@ def inline_handler(query):
         battleship_games[bgid] = _bship_new_game(starter_id, user.first_name or user.username or str(starter_id))
         results.append(types.InlineQueryResultArticle(
             id=f"bship_{bgid}",
-            title="\U0001f6a2 \u041c\u043e\u0440\u0441\u043a\u043e\u0439 \u0431\u043e\u0439",
-            description="\u041f\u043e\u0448\u0430\u0433\u043e\u0432\u0430\u044f \u0438\u0433\u0440\u043e\u043a\u043e\u0432",
+            title=f"\U0001f6a2 {get_game_title(uid, 'bship')}",
+            description=get_game_description(uid, "bship"),
             input_message_content=types.InputTextMessageContent(_bship_public_text(battleship_games[bgid])),
             reply_markup=_bship_public_keyboard(bgid, battleship_games[bgid])
         ))
@@ -5545,8 +5786,8 @@ def inline_handler(query):
         chess_games[cgid] = _chess_new_game(starter_id, user.first_name or user.username or str(starter_id))
         results.append(types.InlineQueryResultArticle(
             id=f"chess_{cgid}",
-            title="♟ Шахматы",
-            description="Классические шахматы 1 на 1",
+            title=f"♟ {get_game_title(uid, 'chess')}",
+            description=get_game_description(uid, "chess"),
             input_message_content=types.InputTextMessageContent(_chess_render_text(chess_games[cgid])),
             reply_markup=_chess_keyboard(cgid, chess_games[cgid])
         ))
@@ -5555,17 +5796,30 @@ def inline_handler(query):
         results.append(types.InlineQueryResultArticle(
             id=f"os_{short_id()}",
             title="🖥 TELOS v1.1 (macOS)",
-            description="Мини ОС в телеграме. Версия 1.1 с новыми функциями!",
-            input_message_content=types.InputTextMessageContent("🖥 *TELOS v1.1*\nВыбирайте приложение:", parse_mode="Markdown"),
+            description=localized_text(
+                uid,
+                "Мини ОС в телеграме. Версия 1.1 с новыми функциями!",
+                "A mini OS inside Telegram. Version 1.1 with new features!",
+                "Міні ОС у телеграмі. Версія 1.1 з новими функціями!",
+            ),
+            input_message_content=types.InputTextMessageContent(
+                localized_text(
+                    uid,
+                    "🖥 *TELOS v1.1*\nВыбирайте приложение:",
+                    "🖥 *TELOS v1.1*\nPick an app:",
+                    "🖥 *TELOS v1.1*\nОбирайте застосунок:",
+                ),
+                parse_mode="Markdown"),
             reply_markup=telos_main_menu()
         ))
 
         # Угадай число
         results.append(types.InlineQueryResultArticle(
             id=f"guess_{short_id()}",
-            title="🔢 Угадай число",
-            description="От 1 до 10",
-            input_message_content=types.InputTextMessageContent("🔢 Угадай число (1–10)"),
+            title=f"🔢 {get_game_title(uid, 'guess')}",
+            description=localized_text(uid, "От 1 до 10", "From 1 to 10", "Від 1 до 10"),
+            input_message_content=types.InputTextMessageContent(
+                f"🔢 {get_game_title(uid, 'guess')} (1–10)"),
             reply_markup=_number_grid(types.InlineKeyboardMarkup(), "guess_inline_")
         ))
 
@@ -5574,15 +5828,15 @@ def inline_handler(query):
             data = user_sys_settings[u_uid]
             if data.get("title") or data.get("msg"):
                 sys_preview_id = short_id()
-                btn_text = data.get("btn") or "Открыть"
+                btn_text = data.get("btn") or localized_text(uid, "Открыть", "Open", "Відкрити")
                 markup_sys = types.InlineKeyboardMarkup()
                 markup_sys.add(types.InlineKeyboardButton(btn_text, callback_data=f"sysopen_{u_uid}_{sys_preview_id}"))
                 results.append(types.InlineQueryResultArticle(
                     id=f"sys_{sys_preview_id}",
-                    title="tg://emoji?id=5242628160297641831 Системное уведомление",
-                    description="Ваше уведомление",
+                    title=localized_text(uid, "🔔 Системное уведомление", "🔔 System notification", "🔔 Системне сповіщення"),
+                    description=localized_text(uid, "Ваше уведомление", "Your notification", "Ваше сповіщення"),
                     input_message_content=types.InputTextMessageContent(
-                        f"*{data.get('title','Системное уведомление')}*\n{data.get('msg','')}",
+                        f"*{data.get('title') or localized_text(uid, 'Системное уведомление', 'System notification', 'Системне сповіщення')}*\n{data.get('msg','')}",
                         parse_mode="Markdown"
                     ),
                     reply_markup=markup_sys
@@ -5590,21 +5844,28 @@ def inline_handler(query):
 
         # Казино
         slot_m = types.InlineKeyboardMarkup()
-        slot_m.add(types.InlineKeyboardButton("🎰 Крутить", callback_data="slot_spin"))
+        slot_m.add(types.InlineKeyboardButton(
+            localized_text(uid, "🎰 Крутить", "🎰 Spin", "🎰 Крутити"), callback_data="slot_spin"))
         results.append(types.InlineQueryResultArticle(
             id=f"slot_{short_id()}",
-            title="🎰 Казино",
-            description="Слот машина",
-            input_message_content=types.InputTextMessageContent("🎰 Нажмите ниже для запуска!"),
+            title=f"🎰 {get_game_title(uid, 'slot')}",
+            description=get_game_description(uid, "slot"),
+            input_message_content=types.InputTextMessageContent(
+                localized_text(uid, "🎰 Нажмите ниже для запуска!", "🎰 Press below to spin!", "🎰 Натисніть нижче, щоб запустити!")),
             reply_markup=slot_m
         ))
 
         # Змейка
         results.append(types.InlineQueryResultArticle(
             id=f"snake_{short_id()}",
-            title="🐍 Змейка",
-            description="Инлайн-змейка",
-            input_message_content=types.InputTextMessageContent("🐍 Используйте кнопки для управления змейкой. "),
+            title=f"🐍 {get_game_title(uid, 'snake')}",
+            description=get_game_description(uid, "snake"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                "🐍 Используйте кнопки для управления змейкой. ",
+                "🐍 Use the buttons to steer the snake. ",
+                "🐍 Використовуйте кнопки для керування змійкою. ",
+            )),
             reply_markup=snake_controls()
         ))
 
@@ -5612,13 +5873,17 @@ def inline_handler(query):
         tgid = short_id()
         results.append(types.InlineQueryResultArticle(
             id=f"tetris_{tgid}",
-            title="🧱 Тетрис",
-            description="Обычный тетрис",
-            input_message_content=types.InputTextMessageContent(
-                "🧱 Тетрис\nНажмите кнопку «Старт», чтобы начать."
-            ),
+            title=f"🧱 {get_game_title(uid, 'tetris')}",
+            description=get_game_description(uid, "tetris"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                "🧱 Тетрис\nНажмите кнопку «Старт», чтобы начать.",
+                "🧱 Tetris\nPress «Start» to begin.",
+                "🧱 Тетріс\nНатисніть кнопку «Старт», щоб почати.",
+            )),
             reply_markup=types.InlineKeyboardMarkup().add(
-                types.InlineKeyboardButton("▶️ Старт", callback_data="tetris_new")
+                types.InlineKeyboardButton(
+                    localized_text(uid, "▶️ Старт", "▶️ Start", "▶️ Старт"), callback_data="tetris_new")
             )
         ))
 
@@ -5630,21 +5895,32 @@ def inline_handler(query):
         preview_markup.row(types.InlineKeyboardButton("⬇️", callback_data="g2048_new_down"))
         results.append(types.InlineQueryResultArticle(
             id=f"g2048_{short_id()}",
-            title="🔢 2048",
-            description="",
-            input_message_content=types.InputTextMessageContent("🔢 2048\nНажмите кнопку, чтобы начать."),
+            title=f"🔢 {get_game_title(uid, 'g2048')}",
+            description=get_game_description(uid, "g2048"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                "🔢 2048\nНажмите кнопку, чтобы начать.",
+                "🔢 2048\nPress a button to start.",
+                "🔢 2048\nНатисніть кнопку, щоб почати.",
+            )),
             reply_markup=preview_markup
         ))
 
         # Пинг-понг
         pgid = short_id()
         pm = types.InlineKeyboardMarkup()
-        pm.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"pong_{pgid}_join"))
+        pm.add(types.InlineKeyboardButton(
+            localized_text(uid, "Присоединиться", "Join", "Приєднатися"), callback_data=f"pong_{pgid}_join"))
         results.append(types.InlineQueryResultArticle(
             id=f"pong_{pgid}",
-            title="🏓 Пинг-понг (2 игрока)",
-            description="Сейчас в разработке",
-            input_message_content=types.InputTextMessageContent("🏓 Пинг-понг\nНажмите 'Присоединиться' чтобы игра началась."),
+            title=f"🏓 {get_game_title(uid, 'pong')} " + localized_text(uid, "(2 игрока)", "(2 players)", "(2 гравці)"),
+            description=localized_text(uid, "Сейчас в разработке", "Work in progress", "Зараз у розробці"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                "🏓 Пинг-понг\nНажмите 'Присоединиться' чтобы игра началась.",
+                "🏓 Ping-Pong\nPress 'Join' to start the game.",
+                "🏓 Пінг-понг\nНатисніть 'Приєднатися', щоб гра почалася.",
+            )),
             reply_markup=pm
         ))
 
@@ -5660,7 +5936,7 @@ def inline_handler(query):
         kb = types.InlineKeyboardMarkup()
         kb.add(
             types.InlineKeyboardButton(
-                "🎯 Загадать клетку",
+                localized_text(uid, "🎯 Загадать клетку", "🎯 Pick a cell", "🎯 Загадати клітинку"),
                 callback_data=f"hide_set_{gid}"
             )
         )
@@ -5668,12 +5944,20 @@ def inline_handler(query):
         results.append(
             types.InlineQueryResultArticle(
                 id=f"hide_{gid}",
-                title="🕵️ Прятки",
-                description="Загадайте клетку - другой игрок угадает",
+                title=localized_text(uid, "🕵️ Прятки", "🕵️ Hide and Seek", "🕵️ Хованки"),
+                description=localized_text(
+                    uid,
+                    "Загадайте клетку - другой игрок угадает",
+                    "Pick a cell - the other player guesses it",
+                    "Загадайте клітинку - інший гравець вгадає",
+                ),
                 input_message_content=types.InputTextMessageContent(
-                    "🕵️ *Прятки*\n\n"
-                    "Игрок 1 загадывает клетку.\n"
-                    "Игрок 2 угадывает за 5 попыток.",
+                    localized_text(
+                        uid,
+                        "🕵️ *Прятки*\n\nИгрок 1 загадывает клетку.\nИгрок 2 угадывает за 5 попыток.",
+                        "🕵️ *Hide and Seek*\n\nPlayer 1 picks a cell.\nPlayer 2 has 5 tries to guess it.",
+                        "🕵️ *Хованки*\n\nГравець 1 загадує клітинку.\nГравець 2 вгадує за 5 спроб.",
+                    ),
                     parse_mode="Markdown"
                 ),
                 reply_markup=kb
@@ -5685,8 +5969,8 @@ def inline_handler(query):
         hgame = hangman_games[hgid] = _hangman_new_game()
         results.append(types.InlineQueryResultArticle(
             id=f"hangman_{hgid}",
-            title="🔤 Виселица",
-            description="Угадайте слово, выбирая буквы",
+            title=f"🔤 {get_game_title(uid, 'hangman')}",
+            description=get_game_description(uid, "hangman"),
             input_message_content=types.InputTextMessageContent(render_hangman_state(hgame)),
             reply_markup=render_hangman_keyboard(hgid, hgame)
         ))
@@ -5697,45 +5981,49 @@ def inline_handler(query):
         minesweeper_games[mgid] = {"board": mboard, "revealed": set(), "mine_positions": mmine_positions}
         results.append(types.InlineQueryResultArticle(
             id=f"minesweeper_{mgid}",
-            title="💣 Сапёр",
-            description="Откройте клетки, избегая мин",
-            input_message_content=types.InputTextMessageContent(f"💣 Сапёр\n{render_minesweeper_board(mboard, set())}"),
+            title=f"💣 {get_game_title(uid, 'minesweeper')}",
+            description=get_game_description(uid, "minesweeper"),
+            input_message_content=types.InputTextMessageContent(
+                f"💣 {get_game_title(uid, 'minesweeper')}\n{render_minesweeper_board(mboard, set())}"),
             reply_markup=_minesweeper_build_markup(mgid, mboard, set())
         ))
 
         # Викторина
         qgid = short_id()
         qqdata = random.choice(QUIZ_QUESTIONS)
-        quiz_games[qgid] = _quiz_new_game(qqdata, starter_id, user.first_name or "Игрок 1")
+        quiz_games[qgid] = _quiz_new_game(qqdata, starter_id, user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
         results.append(types.InlineQueryResultArticle(
             id=f"quizgame_{qgid}",
-            title="🧠 Викторина",
-            description="Ответьте на вопрос первым!",
+            title=f"🧠 {get_game_title(uid, 'quizgame')}",
+            description=get_game_description(uid, "quizgame"),
             input_message_content=types.InputTextMessageContent(_quiz_intro_text(qqdata["q"]), parse_mode="Markdown"),
             reply_markup=_quiz_join_kb(qgid)
         ))
 
         # Комбо-битва
         cgid = short_id()
-        combo_games[cgid] = _combo_new_game(starter_id, user.first_name or "Игрок 1")
+        combo_games[cgid] = _combo_new_game(starter_id, user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
         results.append(types.InlineQueryResultArticle(
             id=f"combogame_{cgid}",
-            title="⚡ Комбо-битва",
-            description="Выбирай атаку/защиту и побеждай!",
+            title=f"⚡ {get_game_title(uid, 'combogame')}",
+            description=get_game_description(uid, "combogame"),
             input_message_content=types.InputTextMessageContent(COMBO_INTRO_TEXT, parse_mode="Markdown"),
             reply_markup=_combo_join_kb(cgid)
         ))
 
         # Мафия
         mgid = short_id()
-        mafia_games[mgid] = mafia_new_game(starter_id, user.first_name or "Игрок 1")
+        mafia_games[mgid] = mafia_new_game(starter_id, user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
         results.append(types.InlineQueryResultArticle(
             id=f"mafia_{mgid}",
-            title="🎭 Мафия",
-            description="Игра на роли: ночь и голосование днем",
-            input_message_content=types.InputTextMessageContent(
-                "🎭 Мафия\n\nСоздано лобби. Нажмите «Присоединиться», затем «Старт»."
-            ),
+            title=f"🎭 {get_game_title(uid, 'mafia')}",
+            description=get_game_description(uid, "mafia"),
+            input_message_content=types.InputTextMessageContent(localized_text(
+                uid,
+                "🎭 Мафия\n\nСоздано лобби. Нажмите «Присоединиться», затем «Старт».",
+                "🎭 Mafia\n\nLobby created. Press «Join», then «Start».",
+                "🎭 Мафія\n\nСтворено лобі. Натисніть «Приєднатися», потім «Старт».",
+            )),
             reply_markup=mafia_build_lobby_kb(mgid)
         ))
 
@@ -5746,8 +6034,18 @@ def inline_handler(query):
         poker_games[pkgid] = pk_state
         results.append(types.InlineQueryResultArticle(
             id=f"poker_{pkgid}",
-            title="🃏 Покер (Техасский холдем)",
-            description=f"Игра против бота, ставка {pk_bet}🪙",
+            title=localized_text(
+                uid,
+                "🃏 Покер (Техасский холдем)",
+                "🃏 Poker (Texas Hold'em)",
+                "🃏 Покер (Техаський холдем)",
+            ),
+            description=localized_text(
+                uid,
+                f"Игра против бота, ставка {pk_bet}🪙",
+                f"Play against the bot, bet {pk_bet}🪙",
+                f"Гра проти бота, ставка {pk_bet}🪙",
+            ),
             input_message_content=types.InputTextMessageContent(_poker_render_text(pk_state)),
             reply_markup=_poker_keyboard(pkgid, pk_state)
         ))
@@ -5766,8 +6064,18 @@ def inline_handler(query):
         duel_st = inline_duel_games[dgid]
         results.append(types.InlineQueryResultArticle(
             id=f"iduel_{dgid}",
-            title="⚔️ Дуэль (KNB, 3 раунда)",
-            description="Камень-ножницы-бумага, 3 раунда против другого игрока",
+            title=localized_text(
+                uid,
+                "⚔️ Дуэль (КНБ, 3 раунда)",
+                "⚔️ Duel (RPS, 3 rounds)",
+                "⚔️ Дуель (КНП, 3 раунди)",
+            ),
+            description=localized_text(
+                uid,
+                "Камень-ножницы-бумага, 3 раунда против другого игрока",
+                "Rock-paper-scissors, 3 rounds against another player",
+                "Камінь-ножиці-папір, 3 раунди проти іншого гравця",
+            ),
             input_message_content=types.InputTextMessageContent(_iduel_text(duel_st)),
             reply_markup=_iduel_kb(dgid, duel_st)
         ))
@@ -5836,14 +6144,14 @@ def _flappy_pm_markup(uid, game_over=False):
     if game_over:
         markup.row(
             types.InlineKeyboardButton("🔄 Ещё раз", callback_data=f"flappy_pm_{uid}_restart"),
-            types.InlineKeyboardButton("tg://emoji?id=5465665476971471368 Закрыть", callback_data=f"flappy_pm_{uid}_close"),
+            types.InlineKeyboardButton("❌ Закрыть", callback_data=f"flappy_pm_{uid}_close"),
         )
         return markup
     markup.row(
         types.InlineKeyboardButton("▶️ Старт", callback_data=f"flappy_pm_{uid}_start"),
         types.InlineKeyboardButton("⬆️ Прыжок", callback_data=f"flappy_pm_{uid}_jump"),
     )
-    markup.add(types.InlineKeyboardButton("tg://emoji?id=5465665476971471368 Закрыть", callback_data=f"flappy_pm_{uid}_close"))
+    markup.add(types.InlineKeyboardButton("❌ Закрыть", callback_data=f"flappy_pm_{uid}_close"))
     return markup
 
 def _render_flappy_pm_text(state):
@@ -5997,7 +6305,7 @@ def guess_inline_callback(call):
             inline_guess_games[mid] = state
 
         if guess == state["target"]:
-            bot.edit_message_text(f"tg://emoji?id=5427009714745517609 Правильно! Загаданное число: {state['target']}", inline_message_id=mid)
+            bot.edit_message_text(f"✅ Правильно! Загаданное число: {state['target']}", inline_message_id=mid)
             inline_guess_games.pop(mid, None)
             bot.answer_callback_query(call.id, "Правильно!")
             return
@@ -6005,7 +6313,7 @@ def guess_inline_callback(call):
         state["attempts"] -= 1
         state["tried"].append(guess)
         if state["attempts"] <= 0:
-            bot.edit_message_text(f"tg://emoji?id=5465665476971471368 Попытки кончились. Загаданное число: {state['target']}", inline_message_id=mid)
+            bot.edit_message_text(f"❌ Попытки кончились. Загаданное число: {state['target']}", inline_message_id=mid)
             inline_guess_games.pop(mid, None)
             bot.answer_callback_query(call.id, "Игра окончена")
             return
@@ -6097,7 +6405,7 @@ def hide_set(call):
     game = hide_games.get(gid)
 
     if not game or call.from_user.id != game["host"]:
-        bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Только создатель игры")
+        bot.answer_callback_query(call.id, "❌ Только создатель игры")
         return
 
     kb = hide_keyboard(f"hide_secret_{gid}")
@@ -6121,14 +6429,14 @@ def hide_secret(call):
         return
 
     if call.from_user.id == game["host"]:
-        bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Вы не можете угадывать свою же клетку")
+        bot.answer_callback_query(call.id, "❌ Вы не можете угадывать свою же клетку")
         return
 
     if game["guesser"] is None:
         game["guesser"] = call.from_user.id
 
     if call.from_user.id != game["guesser"]:
-        bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Сейчас ход другого игрока")
+        bot.answer_callback_query(call.id, "❌ Сейчас ход другого игрока")
         return
 
     if game["attempts"] <= 0:
@@ -6153,7 +6461,7 @@ def hide_secret(call):
         except telebot.apihelper.ApiTelegramException as e:
             msg = str(e).lower()
             if "message is not modified" in msg:
-                bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Уже отмечено")
+                bot.answer_callback_query(call.id, "✅ Уже отмечено")
                 return
             raise
         bot.answer_callback_query(call.id, "🎉 Правильно")
@@ -6171,13 +6479,13 @@ def hide_secret(call):
         except telebot.apihelper.ApiTelegramException as e:
             msg = str(e).lower()
             if "message is not modified" in msg:
-                bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Ничего не изменилось")
+                bot.answer_callback_query(call.id, "❌ Ничего не изменилось")
                 return
             raise
         bot.answer_callback_query(call.id, "💀 Попытки кончились")
         return
 
-    new_message = f"tg://emoji?id=5465665476971471368 Мимо!\n🔁 Осталось попыток: {game['attempts']}"
+    new_message = f"❌ Мимо!\n🔁 Осталось попыток: {game['attempts']}"
     try:
         bot.edit_message_text(
             new_message,
@@ -6187,7 +6495,7 @@ def hide_secret(call):
     except telebot.apihelper.ApiTelegramException as e:
         msg = str(e).lower()
         if "message is not modified" in msg:
-            bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Ничего не изменилось")
+            bot.answer_callback_query(call.id, "❌ Ничего не изменилось")
             return
         raise
     bot.answer_callback_query(call.id)
@@ -6231,7 +6539,7 @@ def ai_callback(call):
         if action == "refresh":
             if status == "done":
                 safe_edit_message(call, _ai_prompt_message(req.get("q"), "done", req.get("a")), reply_markup=_ai_prompt_kb(uid, rid))
-                bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Ответ готов")
+                bot.answer_callback_query(call.id, "✅ Ответ готов")
             elif status == "process":
                 safe_edit_message(call, _ai_prompt_message(req.get("q"), "process"), reply_markup=_ai_prompt_kb(uid, rid))
                 bot.answer_callback_query(call.id, "⏳ Ответ ещё генерируется…")
@@ -6283,7 +6591,7 @@ def ai_callback(call):
                     pending3 = u3.setdefault("pending", {})
                     req3 = pending3.get(rid)
                     if req3 is not None:
-                        req3["a"] = "tg://emoji?id=5465665476971471368 Временная ошибка AI-сервиса. Нажмите «Обновить» или «Получить ответ» ещё раз."
+                        req3["a"] = "❌ Временная ошибка AI-сервиса. Нажмите «Обновить» или «Получить ответ» ещё раз."
                         req3["status"] = "done"
                         save_data(d3)
 
@@ -6296,7 +6604,7 @@ def ai_callback(call):
             started_at = int(req.get("started_at", 0) or 0)
             if started_at and (int(time.time()) - started_at) > 180:
                 req["status"] = "done"
-                req["a"] = "tg://emoji?id=5465665476971471368 Ответ не был получен вовремя (таймаут 3 минуты). Нажмите «Получить ответ» ещё раз."
+                req["a"] = "❌ Ответ не был получен вовремя (таймаут 3 минуты). Нажмите «Получить ответ» ещё раз."
                 save_data(data)
                 safe_edit_message(call, _ai_prompt_message(req.get("q"), "done", req.get("a")), reply_markup=_ai_prompt_kb(uid, rid))
                 bot.answer_callback_query(call.id, "⌛ Таймаут запроса")
@@ -6308,7 +6616,7 @@ def ai_callback(call):
         if status == "done":
             answer = req["a"]
             safe_edit_message(call, _ai_prompt_message(req.get("q"), "done", answer), reply_markup=_ai_prompt_kb(uid, rid))
-            bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Ответ готов!")
+            bot.answer_callback_query(call.id, "✅ Ответ готов!")
             return
 
     except Exception as e:
@@ -6687,11 +6995,17 @@ def inline_2048(query):
     markup.row(types.InlineKeyboardButton("⬅️", callback_data="g2048_new_left"),
                types.InlineKeyboardButton("➡️", callback_data="g2048_new_right"))
     markup.row(types.InlineKeyboardButton("⬇️", callback_data="g2048_new_down"))
+    uid = query.from_user.id
     results = [types.InlineQueryResultArticle(
         id=f"g2048_preview_{short_id()}",
-        title="🔢 2048",
-        description="Нажми стрелку, чтобы начать",
-        input_message_content=types.InputTextMessageContent("🔢 2048\nНажми кнопку, чтобы начать."),
+        title=f"🔢 {get_game_title(uid, 'g2048')}",
+        description=localized_text(uid, "Нажми стрелку, чтобы начать", "Press an arrow to start", "Натисни стрілку, щоб почати"),
+        input_message_content=types.InputTextMessageContent(localized_text(
+            uid,
+            "🔢 2048\nНажми кнопку, чтобы начать.",
+            "🔢 2048\nPress a button to start.",
+            "🔢 2048\nНатисни кнопку, щоб почати.",
+        )),
         reply_markup=markup
     )]
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
@@ -6701,13 +7015,25 @@ def inline_tetris(query):
     if not _inline_guard(query):
         return
     gid = short_id()
+    uid = query.from_user.id
     results = [types.InlineQueryResultArticle(
         id=f"tetris_preview_{gid}",
-        title="🧱 Тетрис",
-        description="Кнопки влево/вправо/отпустить",
-        input_message_content=types.InputTextMessageContent("🧱 Тетрис\nНажмите «Старт»."),
+        title=f"🧱 {get_game_title(uid, 'tetris')}",
+        description=localized_text(
+            uid,
+            "Кнопки влево/вправо/отпустить",
+            "Left / right / drop buttons",
+            "Кнопки вліво/вправо/відпустити",
+        ),
+        input_message_content=types.InputTextMessageContent(localized_text(
+            uid,
+            "🧱 Тетрис\nНажмите «Старт».",
+            "🧱 Tetris\nPress «Start».",
+            "🧱 Тетріс\nНатисніть «Старт».",
+        )),
         reply_markup=types.InlineKeyboardMarkup().add(
-            types.InlineKeyboardButton("▶️ Старт", callback_data="tetris_new")
+            types.InlineKeyboardButton(
+                localized_text(uid, "▶️ Старт", "▶️ Start", "▶️ Старт"), callback_data="tetris_new")
         )
     )]
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
@@ -6720,7 +7046,7 @@ def rps_callback(call):
 
         game = rps_games.get(gid)
         if not game:
-            bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Игра устарела")
+            bot.answer_callback_query(call.id, "❌ Игра устарела")
             return
         if game.get("uid") != call.from_user.id:
             bot.answer_callback_query(call.id, "Эта партия не ваша")
@@ -6747,8 +7073,8 @@ def rps_callback(call):
 
         text = (
             "✂️ *Камень • Ножницы • Бумага*\n\n"
-            f"tg://emoji?id=5373012449597335010 Ты: {icons[user_choice]}\n"
-            f"tg://emoji?id=5372981976804366741 Бот: {icons[bot_choice]}\n\n"
+            f"👤 Ты: {icons[user_choice]}\n"
+            f"🤖 Бот: {icons[bot_choice]}\n\n"
             f"{result}"
         )
 
@@ -6775,7 +7101,7 @@ def rps_callback(call):
 
     except Exception as e:
         log_exception("rps", e)
-        bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Ошибка игры")
+        bot.answer_callback_query(call.id, "❌ Ошибка игры")
 
 @bot.callback_query_handler(func=lambda c: c.data in ["set_msg", "set_btn", "set_title", "set_gui"])
 def sys_set_field(call):
@@ -7019,12 +7345,24 @@ def inline_pong(query):
         return
     gid = short_id()
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"pong_{gid}_join"))
+    uid = query.from_user.id
+    markup.add(types.InlineKeyboardButton(
+        localized_text(uid, "Присоединиться", "Join", "Приєднатися"), callback_data=f"pong_{gid}_join"))
     results = [types.InlineQueryResultArticle(
         id=f"pong_preview_{gid}",
-        title="🏓 Пинг-понг (2 игрока)",
-        description="Нажмите 'Присоединиться' чтобы стать игроком",
-        input_message_content=types.InputTextMessageContent("🏓 Пинг-понг\nНажмите 'Присоединиться', дождитесь второго игрока и начните матч."),
+        title=f"🏓 {get_game_title(uid, 'pong')} " + localized_text(uid, "(2 игрока)", "(2 players)", "(2 гравці)"),
+        description=localized_text(
+            uid,
+            "Нажмите 'Присоединиться' чтобы стать игроком",
+            "Press 'Join' to take a seat",
+            "Натисніть 'Приєднатися', щоб стати гравцем",
+        ),
+        input_message_content=types.InputTextMessageContent(localized_text(
+            uid,
+            "🏓 Пинг-понг\nНажмите 'Присоединиться', дождитесь второго игрока и начните матч.",
+            "🏓 Ping-Pong\nPress 'Join', wait for the second player and start the match.",
+            "🏓 Пінг-понг\nНатисніть 'Приєднатися', дочекайтеся другого гравця та почніть матч.",
+        )),
         reply_markup=markup
     )]
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
@@ -7239,11 +7577,12 @@ def inline_hangman(query):
         return
     gid = short_id()
     game = hangman_games[gid] = _hangman_new_game()
+    uid = query.from_user.id
 
     results = [types.InlineQueryResultArticle(
         id=f"hangman_{gid}",
-        title="🔤 Виселица",
-        description="Угадайте слово, выбирая буквы!",
+        title=f"🔤 {get_game_title(uid, 'hangman')}",
+        description=get_game_description(uid, "hangman"),
         input_message_content=types.InputTextMessageContent(render_hangman_state(game)),
         reply_markup=render_hangman_keyboard(gid, game)
     )]
@@ -7310,10 +7649,10 @@ def hangman_callback(call):
 
         if letter.lower() in word.lower():
             guessed.add(letter)
-            bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Верно!")
+            bot.answer_callback_query(call.id, "✅ Верно!")
         else:
             wrong.add(letter)
-            bot.answer_callback_query(call.id, "tg://emoji?id=5465665476971471368 Неверно!")
+            bot.answer_callback_query(call.id, "❌ Неверно!")
 
         text = render_hangman_state(game)
         if _hangman_word_guessed(game):
@@ -7370,27 +7709,37 @@ def inline_word_duel(query):
         return
 
     gid = short_id()
+    uid = query.from_user.id
     first_word = random.choice(WORD_LIST)
     word_games[gid] = {
         "word": first_word,
-        "player1": query.from_user.id,
-        "p1_name": query.from_user.first_name or "Игрок 1",
+        "player1": uid,
+        "p1_name": query.from_user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"),
         "player2": None,
         "scores": {}
     }
 
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"wordgame_join_{gid}"))
+    kb.add(types.InlineKeyboardButton(
+        localized_text(uid, "Присоединиться", "Join", "Приєднатися"), callback_data=f"wordgame_join_{gid}"))
 
     results = [types.InlineQueryResultArticle(
         id=f"wordgame_{gid}",
-        title="📝 Словесная дуэль",
-        description="Пишите слова, начиная с последней буквы",
+        title=f"📝 {get_game_title(uid, 'wordgame')}",
+        description=get_game_description(uid, "wordgame"),
         input_message_content=types.InputTextMessageContent(
-            "📝 *Словесная дуэль*\n\n"
-            f"Первое слово: `{first_word.upper()}`\n\n"
-            f"Следующий игрок должен написать слово, начинающееся на '{first_word[-1].upper()}'\n\n"
-            "Давайте играть!",
+            localized_text(
+                uid,
+                f"📝 *Словесная дуэль*\n\nПервое слово: `{first_word.upper()}`\n\n"
+                f"Следующий игрок должен написать слово, начинающееся на '{first_word[-1].upper()}'\n\n"
+                "Давайте играть!",
+                f"📝 *Word Duel*\n\nFirst word: `{first_word.upper()}`\n\n"
+                f"The next player must write a word starting with '{first_word[-1].upper()}'\n\n"
+                "Let's play!",
+                f"📝 *Словесна дуель*\n\nПерше слово: `{first_word.upper()}`\n\n"
+                f"Наступний гравець має написати слово, що починається на '{first_word[-1].upper()}'\n\n"
+                "Граймо!",
+            ),
             parse_mode="Markdown"
         ),
         reply_markup=kb
@@ -7405,12 +7754,14 @@ def inline_quiz_game(query):
 
     gid = short_id()
     qdata = random.choice(QUIZ_QUESTIONS)
-    quiz_games[gid] = _quiz_new_game(qdata, query.from_user.id, query.from_user.first_name or "Игрок 1")
+    uid = query.from_user.id
+    quiz_games[gid] = _quiz_new_game(
+        qdata, uid, query.from_user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
 
     results = [types.InlineQueryResultArticle(
         id=f"quizgame_{gid}",
-        title="🧠 Викторина - кто быстрее",
-        description="Ответьте на вопрос первым!",
+        title=f"🧠 {get_game_title(uid, 'quizgame')} " + localized_text(uid, "- кто быстрее", "- who is faster", "- хто швидше"),
+        description=get_game_description(uid, "quizgame"),
         input_message_content=types.InputTextMessageContent(_quiz_intro_text(qdata["q"]), parse_mode="Markdown"),
         reply_markup=_quiz_join_kb(gid)
     )]
@@ -7423,12 +7774,14 @@ def inline_combo_battle(query):
         return
 
     gid = short_id()
-    combo_games[gid] = _combo_new_game(query.from_user.id, query.from_user.first_name or "Игрок 1")
+    uid = query.from_user.id
+    combo_games[gid] = _combo_new_game(
+        uid, query.from_user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
 
     results = [types.InlineQueryResultArticle(
         id=f"combogame_{gid}",
-        title="⚡ Комбо-битва",
-        description="Выбирай атаку/защиту и побеждай!",
+        title=f"⚡ {get_game_title(uid, 'combogame')}",
+        description=get_game_description(uid, "combogame"),
         input_message_content=types.InputTextMessageContent(COMBO_INTRO_TEXT, parse_mode="Markdown"),
         reply_markup=_combo_join_kb(gid)
     )]
@@ -7441,15 +7794,20 @@ def inline_mafia_game(query):
         return
 
     gid = short_id()
-    mafia_games[gid] = mafia_new_game(query.from_user.id, query.from_user.first_name or "Игрок 1")
+    uid = query.from_user.id
+    mafia_games[gid] = mafia_new_game(
+        uid, query.from_user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"))
 
     results = [types.InlineQueryResultArticle(
         id=f"mafia_{gid}",
-        title="🎭 Мафия",
-        description="Нужно 4-10 игроков",
-        input_message_content=types.InputTextMessageContent(
-            "🎭 Мафия\n\nСоздано лобби. Нажмите «Присоединиться», затем «Старт»."
-        ),
+        title=f"🎭 {get_game_title(uid, 'mafia')}",
+        description=localized_text(uid, "Нужно 4-10 игроков", "Needs 4-10 players", "Потрібно 4-10 гравців"),
+        input_message_content=types.InputTextMessageContent(localized_text(
+            uid,
+            "🎭 Мафия\n\nСоздано лобби. Нажмите «Присоединиться», затем «Старт».",
+            "🎭 Mafia\n\nLobby created. Press «Join», then «Start».",
+            "🎭 Мафія\n\nСтворено лобі. Натисніть «Приєднатися», потім «Старт».",
+        )),
         reply_markup=mafia_build_lobby_kb(gid)
     )]
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
@@ -7629,10 +7987,10 @@ def wordgame_join(call):
                 row.append(types.InlineKeyboardButton(letter.upper(), callback_data=f"word_{gid}_{letter}"))
             if row:
                 kb.row(*row)
-            kb.add(types.InlineKeyboardButton("tg://emoji?id=5427009714745517609 Отправить слово", callback_data=f"word_{gid}_submit"))
+            kb.add(types.InlineKeyboardButton("✅ Отправить слово", callback_data=f"word_{gid}_submit"))
             
             bot.edit_message_text(text, inline_message_id=call.inline_message_id, parse_mode="Markdown", reply_markup=kb)
-            bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Вы присоединились!")
+            bot.answer_callback_query(call.id, "✅ Вы присоединились!")
         else:
             bot.answer_callback_query(call.id, "Игрок уже присоединился", show_alert=True)
     except Exception as e:
@@ -7689,7 +8047,7 @@ def quizgame_join(call):
             kb = _quiz_join_kb(gid, owner_can_start=game.get("owner") == uid)
 
         safe_edit_message(call, text, reply_markup=kb, parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Вы присоединились!")
+        bot.answer_callback_query(call.id, "✅ Вы присоединились!")
     except Exception as e:
         log_exception("quizgame_join", e, user_id=getattr(call.from_user, "id", None))
         bot.answer_callback_query(call.id, "Ошибка")
@@ -7767,8 +8125,8 @@ def quiz_input(call):
                 bot.answer_callback_query(call.id, "Неверно. Ждём ответы остальных.")
                 return
 
-            text += f"tg://emoji?id=5467666648263564704 {game['question']}\n\n"
-            text += f"tg://emoji?id=5427009714745517609 Ответ: {game['answer']}"
+            text += f"❓ {game['question']}\n\n"
+            text += f"✅ Ответ: {game['answer']}"
             safe_edit_message(call, text, parse_mode="Markdown")
             quiz_games.pop(gid, None)
             return
@@ -7824,14 +8182,14 @@ def combogame_join(call):
 
         text = (
             f"⚡ *Комбо-битва*\n\n"
-            f"tg://emoji?id=5427009714745517609 Оба игрока готовы!\n\n"
+            f"✅ Оба игрока готовы!\n\n"
             f"{p1_name}\n{game['p2_name']}\n\n"
             f"Раунд 1 из 3\n\n"
             f"Правила:\n⚡ > 🪨\n🪨 > 🛡️\n🛡️ > ⚡\n\n"
             f"Выбирайте приём:"
         )
         bot.edit_message_text(text, inline_message_id=call.inline_message_id, parse_mode="Markdown", reply_markup=_combo_move_kb(gid))
-        bot.answer_callback_query(call.id, "tg://emoji?id=5427009714745517609 Вы присоединились!")
+        bot.answer_callback_query(call.id, "✅ Вы присоединились!")
     except Exception as e:
         log_exception("combogame_join", e, user_id=getattr(call.from_user, "id", None))
         bot.answer_callback_query(call.id, "Ошибка")
@@ -7868,14 +8226,14 @@ def combo_choice(call):
             return
 
         game[my_key] = choice
-        bot.answer_callback_query(call.id, f"tg://emoji?id=5427009714745517609 Вы выбрали: {COMBO_CHOICES[choice]}")
+        bot.answer_callback_query(call.id, f"✅ Вы выбрали: {COMBO_CHOICES[choice]}")
 
         p1_name = game.get("p1_name", "Игрок 1")
         p2_name = game.get("p2_name", "Игрок 2")
 
         if game[other_key] is None:
-            waiting_line = f"{p1_name}: {'tg://emoji?id=5427009714745517609 выбрал' if game['p1_choice'] else '⏳ ждём выбор'}"
-            waiting_line += f"\n{p2_name}: {'tg://emoji?id=5427009714745517609 выбрал' if game['p2_choice'] else '⏳ ждём выбор'}"
+            waiting_line = f"{p1_name}: {'✅ выбрал' if game['p1_choice'] else '⏳ ждём выбор'}"
+            waiting_line += f"\n{p2_name}: {'✅ выбрал' if game['p2_choice'] else '⏳ ждём выбор'}"
             text = f"⚡ *Комбо-битва*\n\nРаунд {game['round']} из 3\n\n{waiting_line}\n\nВыбирайте приём:"
             bot.edit_message_text(text, inline_message_id=call.inline_message_id, parse_mode="Markdown", reply_markup=_combo_move_kb(gid))
             return
@@ -7908,9 +8266,9 @@ def combo_choice(call):
 
         s1, s2 = game["scores"].get(p1, 0), game["scores"].get(p2, 0)
         if s1 > s2:
-            text += f"\n\ntg://emoji?id=5409008750893734809 {p1_name} победил!"
+            text += f"\n\n🏆 {p1_name} победил!"
         elif s2 > s1:
-            text += f"\n\ntg://emoji?id=5409008750893734809 {p2_name} победил!"
+            text += f"\n\n🏆 {p2_name} победил!"
         else:
             text += "\n\n🤝 Ничья!"
         bot.edit_message_text(text, inline_message_id=call.inline_message_id, parse_mode="Markdown")
@@ -8651,11 +9009,13 @@ def inline_minesweeper(query):
     board, mine_positions = generate_minesweeper_board()
     gid = short_id()
     minesweeper_games[gid] = {"board": board, "revealed": set(), "mine_positions": mine_positions}
+    uid = query.from_user.id
     results = [types.InlineQueryResultArticle(
         id=f"minesweeper_{gid}",
-        title="💣 Сапёр",
-        description="Откройте клетки, избегая мин!",
-        input_message_content=types.InputTextMessageContent(f"💣 Сапёр\n{render_minesweeper_board(board, set())}"),
+        title=f"💣 {get_game_title(uid, 'minesweeper')}",
+        description=get_game_description(uid, "minesweeper"),
+        input_message_content=types.InputTextMessageContent(
+            f"💣 {get_game_title(uid, 'minesweeper')}\n{render_minesweeper_board(board, set())}"),
         reply_markup=_minesweeper_build_markup(gid, board, set())
     )]
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
@@ -8794,7 +9154,7 @@ def telos_callbacks(call):
             elif len(set(picks)) == 2:
                 result = "✨ Почти!"
             else:
-                result = "tg://emoji?id=5467918917462688479"
+                result = "🚪 "
             bot.answer_callback_query(call.id, f"{roll}\n{result}", show_alert=True)
             return
 
@@ -8826,7 +9186,7 @@ def telos_callbacks(call):
         if data == "os_game_dice":
             value = random.randint(1, 6)
             faces = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
-            bot.answer_callback_query(call.id, f"tg://emoji?id=5467918917462688479 Выпало: {faces[value]} ({value})", show_alert=True)
+            bot.answer_callback_query(call.id, f"🚪 Выпало: {faces[value]} ({value})", show_alert=True)
             return
 
         if data.startswith("os_game_guess_pick_"):
@@ -8845,7 +9205,7 @@ def telos_callbacks(call):
                 bot.answer_callback_query(call.id, f"🎉 Верно! Это {target}", show_alert=True)
             else:
                 hint = "меньше" if pick > target else "больше"
-                bot.answer_callback_query(call.id, f"tg://emoji?id=5465665476971471368 Неверно. Загаданное число {hint}.", show_alert=True)
+                bot.answer_callback_query(call.id, f"❌ Неверно. Загаданное число {hint}.", show_alert=True)
             return
 
         if data == "os_terminal":
@@ -8961,10 +9321,10 @@ def slot_spin(call):
     elif len(set(roll)) == 2:
         text += "\n✨✨"
     else:
-        text += "\ntg://emoji?id=5467918917462688479"
+        text += "\n🚪 "
     bot.edit_message_text(f"🎰 результат\n {text}\n", inline_message_id=call.inline_message_id,
                           reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🎰 Ещё раз", callback_data="slot_spin")))
-    bot.answer_callback_query(call.id, "Крутим tg://emoji?id=5467918917462688479")
+    bot.answer_callback_query(call.id, "Крутим 🚪 ")
 
 def play_inline_easter_egg(inline_id):
     frames = [
@@ -9010,9 +9370,9 @@ def telos_save_input(message):
             st.setdefault("notes", []).append(text[:500])
             st["notes"] = st["notes"][-100:]
             _telos_save_state(uid, st)
-            bot.send_message(uid, "tg://emoji?id=5427009714745517609 Заметка добавлена")
+            bot.send_message(uid, "✅ Заметка добавлена")
         else:
-            bot.send_message(uid, "tg://emoji?id=5465665476971471368 Пустая заметка не сохранена")
+            bot.send_message(uid, "❌ Пустая заметка не сохранена")
         return
 
     if action == "new_file":
@@ -9026,13 +9386,13 @@ def telos_save_input(message):
         st.setdefault("files", []).append({"name": name, "content": content})
         st["files"] = st["files"][-100:]
         _telos_save_state(uid, st)
-        bot.send_message(uid, f"tg://emoji?id=5427009714745517609 Файл `{name}` сохранён", parse_mode="Markdown")
+        bot.send_message(uid, f"✅ Файл `{name}` сохранён", parse_mode="Markdown")
         return
 
     if action == "set_os_name":
         st.setdefault("settings", {})["os_name"] = (text[:24] if text else "TELOS")
         _telos_save_state(uid, st)
-        bot.send_message(uid, f"tg://emoji?id=5427009714745517609 Имя ОС: *{st['settings']['os_name']}*", parse_mode="Markdown")
+        bot.send_message(uid, f"✅ Имя ОС: *{st['settings']['os_name']}*", parse_mode="Markdown")
         return
 
     if action == "term_input":
@@ -9044,7 +9404,7 @@ def telos_save_input(message):
         bot.send_message(uid, f"`$ {text}`\n`{out}`", parse_mode="Markdown")
         return
 
-    bot.send_message(uid, "tg://emoji?id=5465665476971471368 Неизвестное действие TELOS")
+    bot.send_message(uid, "❌ Неизвестное действие TELOS")
 
 @bot.message_handler(func=lambda m: m.from_user.id in support_chat_wait, content_types=["text", "photo", "video"])
 def support_user_message(message):
@@ -9085,9 +9445,9 @@ def support_user_message(message):
             pass
 
     if sent:
-        bot.send_message(message.chat.id, "tg://emoji?id=5427009714745517609 Сообщение отправлено в поддержку. Ожидайте ответ здесь в боте.")
+        bot.send_message(message.chat.id, "✅ Сообщение отправлено в поддержку. Ожидайте ответ здесь в боте.")
     else:
-        bot.send_message(message.chat.id, "tg://emoji?id=5465665476971471368 Сейчас нет доступных операторов поддержки.")
+        bot.send_message(message.chat.id, "❌ Сейчас нет доступных операторов поддержки.")
 
 @bot.message_handler(func=lambda m: m.from_user.id in system_notify_wait)
 def sys_save_value(message):
@@ -9112,11 +9472,11 @@ def sys_save_value(message):
         d = load_data()
         d["broadcast"] = BROADCAST_SETTINGS
         save_data(d)
-        bot.send_message(uid, "tg://emoji?id=5427009714745517609 Broadcast сохранён!")
+        bot.send_message(uid, "✅ Broadcast сохранён!")
         return
 
     user_sys_settings[uid][field] = message.text
-    bot.send_message(uid, "tg://emoji?id=5427009714745517609 Сохранено!")
+    bot.send_message(uid, "✅ Сохранено!")
 
 @bot.message_handler(func=lambda m: m.from_user.id in admin_wait)
 def admin_wait_input(message):
@@ -9132,9 +9492,9 @@ def admin_wait_input(message):
             return
         ok = _room_close(code, reason="закрыто админом")
         if ok:
-            bot.send_message(uid, f"tg://emoji?id=5427009714745517609 Пати {code} закрыто.")
+            bot.send_message(uid, f"✅ Пати {code} закрыто.")
         else:
-            bot.send_message(uid, f"tg://emoji?id=5465665476971471368 Пати {code} не найдено.")
+            bot.send_message(uid, f"❌ Пати {code} не найдено.")
         return
     if action == "ban_user":
         parts = (message.text or "").split(maxsplit=1)
@@ -9417,7 +9777,7 @@ def show_language_selection(chat_id):
     for lang_code, lang_name in LANGUAGES.items():
         kb.add(types.InlineKeyboardButton(lang_name, callback_data=f"set_lang_{lang_code}"))
     
-    welcome_msg = "tg://emoji?id=5399898266265475100 Welcome! Choose your language:\n\ntg://emoji?id=5447309366568953338 Ласкаво просимо! Оберіть мову:\n\ntg://emoji?id=5449408995691341691 Добро пожаловать! Выберите язык:"
+    welcome_msg = "🌍 Welcome! Choose your language:\n\n🇺🇦 Ласкаво просимо! Оберіть мову:\n\n🇷🇺 Добро пожаловать! Выберите язык:"
     bot.send_message(chat_id, welcome_msg, reply_markup=kb)
 
 def show_main_menu(chat_id, uid):
@@ -9756,7 +10116,7 @@ def show_settings_menu(message, uid):
     kb = types.InlineKeyboardMarkup(row_width=1)
     
     lang = get_user_language(uid)
-    lang_name = LANGUAGES.get(lang, "tg://emoji?id=5449408995691341691 Русский")
+    lang_name = LANGUAGES.get(lang, "🇷🇺 Русский")
 
     kb.add(types.InlineKeyboardButton(f"{t(uid, 'language_label')}: {lang_name}", callback_data="change_language"))
     kb.add(types.InlineKeyboardButton(t(uid, "notifications"), callback_data="toggle_notifications"))
