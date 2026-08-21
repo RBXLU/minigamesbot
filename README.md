@@ -1,1 +1,2 @@
 # minigamesbot
+MIT License
