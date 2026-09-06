@@ -9,6 +9,7 @@ import logging
 import traceback
 import sys
 from itertools import combinations
+from collections import OrderedDict
 from threading import Thread
 import html
 import json
@@ -2410,30 +2411,62 @@ questions = [
     }
 ]
 
-inline_ttt_games = {}
-inline_guess_games = {}
-inline_snake_games = {}
-inline_duel_games = {}
+# Инлайн-выдача заводит сессию под каждый показанный результат, а открывают из них
+# один. Остальные никто не удалит — за сутки это съедало сотни мегабайт. Держим
+# ограниченное число, вытесняя те, к которым дольше всего не обращались: активная
+# партия остаётся, пока в неё играют.
+GAME_SESSIONS_LIMIT = int(os.getenv("GAME_SESSIONS_LIMIT", "400"))
+
+
+class BoundedGames(OrderedDict):
+    __slots__ = ("_limit",)
+
+    def __init__(self, limit=None):
+        super().__init__()
+        self._limit = limit or GAME_SESSIONS_LIMIT
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self._limit:
+            self.popitem(last=False)
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
+inline_ttt_games = BoundedGames()
+inline_guess_games = BoundedGames()
+inline_snake_games = BoundedGames()
+inline_duel_games = BoundedGames()
 user_sys_settings = {}
 system_notify_wait = {}
 telos_input_wait = {}
 support_chat_wait = {}
 admin_wait = {}
-millionaire_games = {}
+millionaire_games = BoundedGames()
 user_show_easter_egg = {}
-pm_flappy_games = {}
+pm_flappy_games = BoundedGames()
 games_2048 = {}
 games_pong = {}
 user_ai_mode = {}
-rps_games = {}
-hide_games = {}
-hangman_games = {}
-mafia_games = {}
+rps_games = BoundedGames()
+hide_games = BoundedGames()
+hangman_games = BoundedGames()
+mafia_games = BoundedGames()
 games_tetris = {}
-reaction_games = {}
-blackjack_games = {}
+reaction_games = BoundedGames()
+blackjack_games = BoundedGames()
 room_polls = {}
-pm_ttt_games = {}
+pm_ttt_games = BoundedGames()
 find_queue = {}
 find_matches = {}
 
@@ -2523,12 +2556,12 @@ HANGMAN_WORDS = {
     "несправедливость": "Нечестное обращение"
 }
 
-word_games = {}
-quiz_games = {}
-combo_games = {}
-wordle_games = {}
-chess_games = {}
-battleship_games = {}
+word_games = BoundedGames()
+quiz_games = BoundedGames()
+combo_games = BoundedGames()
+wordle_games = BoundedGames()
+chess_games = BoundedGames()
+battleship_games = BoundedGames()
 
 WORDLE_WORDS = [
     "абзац", "аванс", "аврал", "автор", "агент", "адрес", "азарт", "актер",
@@ -2787,7 +2820,7 @@ def _reaction_start(chat_id, uid):
 POKER_SUITS = ["♠", "♥", "♦", "♣"]
 POKER_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 POKER_RANK_VAL = {r: i for i, r in enumerate(POKER_RANKS)}
-poker_games = {}
+poker_games = BoundedGames()
 
 def _poker_make_deck():
     return [(r, s) for s in POKER_SUITS for r in POKER_RANKS]
@@ -7578,7 +7611,7 @@ def millionaire_callback(call):
         log_exception("mill", e)
         bot.answer_callback_query(call.id, "Ошибка Миллионера")
 
-minesweeper_games = {}
+minesweeper_games = BoundedGames()
 
 def generate_minesweeper_board(size=5, mines=5):
     board = [[0 for _ in range(size)] for _ in range(size)]
