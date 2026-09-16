@@ -422,24 +422,27 @@ GAME_DESCRIPTIONS_LANG = {
 
 WHATS_NEW_ITEMS = {
     "ru": [
-        "Анимированные эмодзи снова работают: меню, квесты и достижения больше не ломаются.",
-        "Mini App снова открывается — бот переехал на хостинг с рабочим сертификатом.",
-        "Новый сервер: сообщения и inline-режим отвечают заметно быстрее.",
-        "Исправлена утечка памяти — бот больше не тяжелеет со временем.",
+        "Сапёр переделан: на кнопках видно цифры и мины, пустая область открывается целиком, появились флажки, а первый ход больше не подрывается.",
+        "Крестики-нолики: выигрышная линия подсвечивается, видно чей ход по имени, реванш начинает тот, кто ходил вторым.",
+        "Словесная дуэль заработала полностью — буквы, проверка слова, счёт и реванш.",
+        "Пинг-понг вышел из разработки: имена игроков, счёт серии и рабочая кнопка новой игры.",
+        "Камень-ножницы-бумага теперь считает серию, виселица показывает верные и неверные буквы, викторина — длину ответа.",
         "Бот опенсорсный: github.com/RBXLU/minigamesbot",
     ],
     "en": [
-        "Animated emoji work again: the menu, quests and achievements no longer break.",
-        "The Mini App opens again — the bot moved to hosting with a working certificate.",
-        "New server: messages and inline mode reply noticeably faster.",
-        "Fixed a memory leak — the bot no longer grows heavier over time.",
+        "Minesweeper reworked: buttons show numbers and mines, empty areas open at once, flags are in, and the first tap can no longer blow up.",
+        "Tic-tac-toe: the winning line is highlighted, the turn line names the player, and the rematch starts with whoever went second.",
+        "The word duel is fully playable now — letters, word checks, scoring and a rematch.",
+        "Ping-pong is out of development: player names, series score and a working new-game button.",
+        "Rock-paper-scissors keeps a series score, hangman marks right and wrong letters, the quiz shows the answer length.",
         "The bot is open-source: github.com/RBXLU/minigamesbot",
     ],
     "uk": [
-        "Анімовані емодзі знову працюють: меню, квести та досягнення більше не ламаються.",
-        "Mini App знову відкривається — бот переїхав на хостинг із робочим сертифікатом.",
-        "Новий сервер: повідомлення та inline-режим відповідають помітно швидше.",
-        "Виправлено витік пам'яті — бот більше не важчає з часом.",
+        "Сапер перероблено: на кнопках видно цифри та міни, порожня область відкривається повністю, з'явилися прапорці, а перший хід більше не підривається.",
+        "Хрестики-нулики: виграшна лінія підсвічується, видно чий хід за іменем, реванш починає той, хто ходив другим.",
+        "Словесна дуель запрацювала повністю — літери, перевірка слова, рахунок і реванш.",
+        "Пінг-понг вийшов із розробки: імена гравців, рахунок серії та робоча кнопка нової гри.",
+        "Камінь-ножиці-папір рахує серію, шибениця показує вірні та невірні літери, вікторина — довжину відповіді.",
         "Бот з відкритим кодом: github.com/RBXLU/minigamesbot",
     ],
 }
@@ -2755,11 +2758,19 @@ def _quiz_new_game(qdata, owner_id, owner_name):
     }
 
 
-def _quiz_intro_text(question):
+def _quiz_answer_hint(answer):
+    """Длина ответа — без неё угадать слово вслепую почти нельзя."""
+    letters = len(str(answer or "").replace(" ", ""))
+    return f"Ответ: {letters} симв." if letters else ""
+
+
+def _quiz_intro_text(question, answer=""):
+    hint = _quiz_answer_hint(answer)
     return (
         "🧠 *Викторина*\n\n"
-        f"❓ {question}\n\n"
-        "Кто ответит первым правильно - выигрывает!"
+        f"❓ {question}\n"
+        + (f"{hint}\n" if hint else "")
+        + "\nКто ответит первым правильно - выигрывает!"
     )
 
 
@@ -2791,13 +2802,19 @@ def _quiz_input_kb(gid):
 
 def _quiz_status_text(game, footer):
     players = game["players"]
-    text = "🧠 *Викторина*\n\n"
-    text += f"❓ {game['question']}\n\n"
-    text += f"Игроки ({len(players)}/{game.get('max_players', 4)}):\n\n"
+    hint = _quiz_answer_hint(game.get("answer", ""))
+    lines = ["🧠 *Викторина*", "", f"❓ {game['question']}"]
+    if hint:
+        lines.append(hint)
+    lines += ["", f"Игроки ({len(players)}/{game.get('max_players', 4)}):"]
     for pid in players:
-        status = "✅ ответ готов" if game["answered"].get(pid) else "⌨️ вводит"
-        text += f"- {game['names'].get(pid, 'Игрок')}: {status}\n\n"
-    return text + footer
+        if game["answered"].get(pid):
+            status = "✅ ответ принят" if game["correct"].get(pid) else "❌ не угадал"
+        else:
+            typed = len(game["inputs"].get(pid, "") or "")
+            status = f"⌨️ набрано {typed}" if typed else "⌨️ вводит"
+        lines.append(f"• {game['names'].get(pid, 'Игрок')}: {status}")
+    return "\n".join(lines) + "\n" + footer
 
 
 def _quiz_normalize_game(game):
@@ -6224,7 +6241,7 @@ def inline_handler(query):
             id=f"quizgame_{qgid}",
             title=f"🧠 {get_game_title(uid, 'quizgame')}",
             description=get_game_description(uid, "quizgame"),
-            input_message_content=types.InputTextMessageContent(_quiz_intro_text(qqdata["q"]), parse_mode="Markdown"),
+            input_message_content=types.InputTextMessageContent(_quiz_intro_text(qqdata["q"], qqdata["a"]), parse_mode="Markdown"),
             reply_markup=_quiz_join_kb(qgid)
         ))
 
@@ -7310,28 +7327,34 @@ def rps_callback(call):
         }
 
         if user_choice == bot_choice:
-            result = "🤝 Ничья!"
-            _record_game_result_once(call.from_user.id, "rps", "draws", gid)
+            outcome, result = "draws", "🤝 Ничья!"
         elif (
             (user_choice == "rock" and bot_choice == "scissors") or
             (user_choice == "scissors" and bot_choice == "paper") or
             (user_choice == "paper" and bot_choice == "rock")
         ):
-            result = "🎉 Вы победили!"
-            _record_game_result_once(call.from_user.id, "rps", "wins", gid)
+            outcome, result = "wins", "🎉 Вы победили!"
         else:
-            result = "😢 Вы проиграли"
-            _record_game_result_once(call.from_user.id, "rps", "losses", gid)
+            outcome, result = "losses", "😢 Вы проиграли"
+        _record_game_result_once(call.from_user.id, "rps", outcome, gid)
+
+        # Счёт серии переезжает в следующий раунд того же сообщения.
+        series = dict(game.get("series") or {"wins": 0, "losses": 0, "draws": 0})
+        series[outcome] = series.get(outcome, 0) + 1
+        rounds = series["wins"] + series["losses"] + series["draws"]
 
         text = (
             "✂️ *Камень • Ножницы • Бумага*\n\n"
             f"👤 Вы: {icons[user_choice]}\n"
             f"🤖 Бот: {icons[bot_choice]}\n\n"
-            f"{result}"
+            f"{result}\n\n"
+            f"Серия — раунд {rounds}\n"
+            f"Вы {series['wins']} : {series['losses']} бот"
+            + (f" · ничьих {series['draws']}" if series["draws"] else "")
         )
 
         new_gid = short_id()
-        rps_games[new_gid] = {"uid": call.from_user.id}
+        rps_games[new_gid] = {"uid": call.from_user.id, "series": series}
 
         kb = types.InlineKeyboardMarkup()
         kb.row(
@@ -7802,18 +7825,19 @@ def _hangman_word_guessed(game):
     return all(letter.lower() in game["guessed"] for letter in game["word"])
 
 
-def render_hangman_state(game):
+def render_hangman_state(game, reveal=False):
     wrong = game["wrong"]
     attempts = game["attempts"]
+    left = max(0, attempts - len(wrong))
     display = "".join(
-        (letter.upper() if letter.lower() in game["guessed"] else "_") + " "
+        (letter.upper() if reveal or letter.lower() in game["guessed"] else "_") + " "
         for letter in game["word"]
     )
 
     text = "```\n" + HANGMAN_STAGES[min(len(wrong), len(HANGMAN_STAGES) - 1)] + "\n```\n\n"
     text += f"Слово: `{display}`\n"
     text += f"Ошибки: {', '.join(sorted(c.upper() for c in wrong)) if wrong else '-'}\n"
-    text += f"Попыток: {attempts - len(wrong)}/{attempts}\n"
+    text += f"Попыток: {'❤️' * left}{'🖤' * (attempts - left)} {left}/{attempts}\n"
 
     if game.get("hint_used"):
         text += f"\n💡 Подсказка: {game.get('hint', '')}"
@@ -7836,9 +7860,14 @@ def render_hangman_keyboard(gid, game):
 
     row = []
     for letter in HANGMAN_ALPHABET:
-        used = letter in guessed or letter in wrong
+        if letter in guessed:
+            label, used = f"{letter.upper()}✅", True
+        elif letter in wrong:
+            label, used = f"{letter.upper()}❌", True
+        else:
+            label, used = letter.upper(), False
         row.append(types.InlineKeyboardButton(
-            "✓" if used else letter.upper(),
+            label,
             callback_data="none" if used else f"hangman_{gid}_{letter}",
         ))
         if len(row) == 5:
@@ -7933,12 +7962,14 @@ def hangman_callback(call):
             wrong.add(letter)
             bot.answer_callback_query(call.id, "❌ Неверно!")
 
-        text = render_hangman_state(game)
+        lost = len(wrong) >= attempts
+        text = render_hangman_state(game, reveal=lost)
         if _hangman_word_guessed(game):
             text += f"\n\n🎉 Вы выиграли! Слово: {word.upper()}"
             _record_game_result_once(call.from_user.id, "hangman", "wins", gid)
-        elif len(wrong) >= attempts:
+        elif lost:
             text += f"\n\n💀 Вы проиграли! Слово: {word.upper()}"
+            text += f"\n💡 {game.get('hint', '')}"
             _record_game_result_once(call.from_user.id, "hangman", "losses", gid)
 
         bot.edit_message_text(
@@ -8264,7 +8295,7 @@ def inline_quiz_game(query):
         id=f"quizgame_{gid}",
         title=f"🧠 {get_game_title(uid, 'quizgame')} " + localized_text(uid, "- кто быстрее", "- who is faster", "- хто швидше"),
         description=get_game_description(uid, "quizgame"),
-        input_message_content=types.InputTextMessageContent(_quiz_intro_text(qdata["q"]), parse_mode="Markdown"),
+        input_message_content=types.InputTextMessageContent(_quiz_intro_text(qdata["q"], qdata["a"]), parse_mode="Markdown"),
         reply_markup=_quiz_join_kb(gid)
     )]
 
@@ -8720,7 +8751,9 @@ def quiz_input(call):
 
             text += f"❓ {game['question']}\n\n"
             text += f"✅ Ответ: {game['answer']}"
-            safe_edit_message(call, text, parse_mode="Markdown")
+            again = types.InlineKeyboardMarkup()
+            again.add(types.InlineKeyboardButton("🔁 Ещё вопрос", callback_data="quizgame_new"))
+            safe_edit_message(call, text, reply_markup=again, parse_mode="Markdown")
             quiz_games.pop(gid, None)
             return
 
@@ -8743,6 +8776,25 @@ def quiz_input(call):
     except Exception as e:
         log_exception("quiz_input", e, user_id=getattr(call.from_user, "id", None))
         bot.answer_callback_query(call.id, "Ошибка")
+
+@bot.callback_query_handler(func=lambda c: c.data == "quizgame_new")
+def quizgame_next_question(call):
+    try:
+        gid = short_id()
+        qdata = random.choice(QUIZ_QUESTIONS)
+        uid = call.from_user.id
+        quiz_games[gid] = _quiz_new_game(qdata, uid, call.from_user.first_name or "Игрок 1")
+        safe_edit_message(
+            call,
+            _quiz_intro_text(qdata["q"], qdata["a"]),
+            reply_markup=_quiz_join_kb(gid),
+            parse_mode="Markdown",
+        )
+        bot.answer_callback_query(call.id, "Новый вопрос!")
+    except Exception as e:
+        log_exception("quizgame_new", e, user_id=getattr(call.from_user, "id", None))
+        bot.answer_callback_query(call.id, "Ошибка викторины")
+
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("combogame_join_"))
 def combogame_join(call):
