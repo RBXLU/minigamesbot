@@ -1612,6 +1612,7 @@ _CALLBACK_GAME_RULES = (
     ("combo_", "combogame", 1, 3, True),
     ("mafia_", "mafia", 2, 3, True),
     ("wordgame_join_", "wordgame", 2, 3, True),
+    ("word_", "wordgame", 1, 3, True),
     ("guess_inline_", "guess", None, 0, False),
     ("coin_flip", "coin", None, 0, False),
     ("slot_spin", "slot", None, 0, False),
@@ -2196,6 +2197,16 @@ def claim_quest_reward(user_id, quest_type, quest_id):
     save_data(d)
     return True
 
+def _pong_record_results(state, gid):
+    winner_idx = state.get("winner")
+    players = state.get("players") or [None, None]
+    if winner_idx is None or not all(players):
+        return
+    session = f"pong:{gid}:{state.get('round', 1)}"
+    _record_game_result_once(players[winner_idx], "pong", "wins", session)
+    _record_game_result_once(players[1 - winner_idx], "pong", "losses", session)
+
+
 def pong_game_loop(gid, inline_id):
     while gid in games_pong:
         state = games_pong.get(gid)
@@ -2219,8 +2230,10 @@ def pong_game_loop(gid, inline_id):
         except Exception:
             break
 
-        if state.get("winner"):
-            games_pong.pop(gid, None)
+        if state.get("winner") is not None:
+            # Состояние остаётся в памяти, чтобы работала кнопка «Новая игра».
+            state["loop_running"] = False
+            _pong_record_results(state, gid)
             break
         time.sleep(0.6)
 
@@ -3818,6 +3831,8 @@ def _user_display_name_from_id(uid):
 
 TTT_X = "❌ "
 TTT_SYMBOLS = {" ": "⬜️", TTT_X: TTT_X, "⭕": "⭕️"}
+#: Символы, которыми подсвечивается выигрышная линия.
+TTT_WIN_HIGHLIGHT = {TTT_X: "❎", "⭕": "🅾️"}
 TTT_WIN_PATTERNS = (
     (0, 1, 2), (3, 4, 5), (6, 7, 8),
     (0, 3, 6), (1, 4, 7), (2, 5, 8),
@@ -3825,22 +3840,32 @@ TTT_WIN_PATTERNS = (
 )
 
 
-def ttt_render_header(game):
+def ttt_render_header(game, finished=False):
     p1_id, p2_id = game["players"][0], game["players"][1]
     p1_name = game["names"].get(p1_id, _user_display_name_from_id(p1_id))
     p2_name = game["names"].get(p2_id, _user_display_name_from_id(p2_id))
     score1 = game["scores"].get(p1_id, 0)
     score2 = game["scores"].get(p2_id, 0)
-    line1 = f"{TTT_X} {p1_name} — {score1}"
-    line2 = f"⭕ {p2_name} — {score2}"
-    turn_symbol = TTT_X if game["turn"] == p1_id else "⭕"
-    return f"{line1}\n{line2}\n\nХодит: {turn_symbol}\n\n"
+    turn_id = game.get("turn")
+    lines = [
+        f"Партия {game.get('round', 1)}",
+        f"{TTT_X} {p1_name} — {score1}",
+        f"⭕ {p2_name} — {score2}",
+    ]
+    if not finished:
+        turn_symbol = TTT_X if turn_id == p1_id else "⭕"
+        turn_name = p1_name if turn_id == p1_id else p2_name
+        lines.append(f"\nХодит: {turn_symbol} {turn_name}")
+    return "\n".join(lines) + "\n\n"
 
-def ttt_render_board(board):
-    return "\n".join(
-        " ".join(board[r * 3 + c] if board[r * 3 + c].strip() else "⬜️" for c in range(3))
-        for r in range(3)
-    )
+def ttt_render_board(board, highlight=()):
+    def cell(i):
+        value = board[i]
+        if not value.strip():
+            return "⬜️"
+        return TTT_WIN_HIGHLIGHT.get(value, value) if i in highlight else value
+
+    return "\n".join(" ".join(cell(r * 3 + c) for c in range(3)) for r in range(3))
 
 def ttt_build_keyboard(gid, board):
     kb = types.InlineKeyboardMarkup()
@@ -3979,7 +4004,7 @@ def _pm_ttt_render_text(game):
         turn_symbol = TTT_X if game.get("turn") == p1 else "⭕"
         lines.append(f"Ходит: {turn_symbol} {game['names'].get(game.get('turn'), 'Игрок')}")
     lines.append("")
-    lines.append(ttt_render_board(game["board"]))
+    lines.append(ttt_render_board(game["board"], game.get("win_line") or ()))
     return "\n".join(lines)
 
 
@@ -6122,7 +6147,7 @@ def inline_handler(query):
         results.append(types.InlineQueryResultArticle(
             id=f"pong_{pgid}",
             title=f"🏓 {get_game_title(uid, 'pong')} " + localized_text(uid, "(2 игрока)", "(2 players)", "(2 гравці)"),
-            description=localized_text(uid, "Сейчас в разработке", "Work in progress", "Зараз у розробці"),
+            description=localized_text(uid, "Матч до 5 очков", "First to 5 points", "Матч до 5 очок"),
             input_message_content=types.InputTextMessageContent(localized_text(
                 uid,
                 "🏓 Пинг-понг\nНажмите 'Присоединиться' чтобы игра началась.",
@@ -6183,15 +6208,13 @@ def inline_handler(query):
         ))
 
         mgid = short_id()
-        mboard, mmine_positions = generate_minesweeper_board()
-        minesweeper_games[mgid] = {"board": mboard, "revealed": set(), "mine_positions": mmine_positions}
+        mgame = minesweeper_games[mgid] = _minesweeper_new_game()
         results.append(types.InlineQueryResultArticle(
             id=f"minesweeper_{mgid}",
             title=f"💣 {get_game_title(uid, 'minesweeper')}",
             description=get_game_description(uid, "minesweeper"),
-            input_message_content=types.InputTextMessageContent(
-                f"💣 {get_game_title(uid, 'minesweeper')}\n{render_minesweeper_board(mboard, set())}"),
-            reply_markup=_minesweeper_build_markup(mgid, mboard, set())
+            input_message_content=types.InputTextMessageContent(_minesweeper_text(mgame)),
+            reply_markup=_minesweeper_build_markup(mgid, mgame)
         ))
 
         qgid = short_id()
@@ -6832,8 +6855,15 @@ def ai_callback(call):
         log_exception("ai_callback", e)
         bot.answer_callback_query(call.id, "Ошибка при получении ответа")
 
+def _ttt_win_line(board, symbol):
+    for a, b, c in TTT_WIN_PATTERNS:
+        if board[a] == board[b] == board[c] == symbol:
+            return (a, b, c)
+    return None
+
+
 def _ttt_wins(board, symbol):
-    return any(board[a] == board[b] == board[c] == symbol for a, b, c in TTT_WIN_PATTERNS)
+    return _ttt_win_line(board, symbol) is not None
 
 
 def _ttt_restart_kb(gid):
@@ -6842,8 +6872,8 @@ def _ttt_restart_kb(gid):
     return kb
 
 
-def _ttt_show_board(call, gid, game, prefix="", finished=False):
-    text = prefix + ttt_render_header(game) + ttt_render_board(game["board"])
+def _ttt_show_board(call, gid, game, prefix="", finished=False, highlight=()):
+    text = prefix + ttt_render_header(game, finished=finished) + ttt_render_board(game["board"], highlight)
     kb = _ttt_restart_kb(gid) if finished else ttt_build_keyboard(gid, game["board"])
     bot.edit_message_text(text, inline_message_id=call.inline_message_id, reply_markup=kb)
 
@@ -6874,6 +6904,8 @@ def ttt_join(call):
             },
             "scores": {host_id: 0, guest_id: 0},
             "turn": guest_id,
+            "starter": guest_id,
+            "round": 1,
         }
 
         _ttt_show_board(call, gid, game)
@@ -6915,20 +6947,24 @@ def ttt_move(call):
         symbol = TTT_X if uid == p1 else "⭕"
         game["board"][cell] = symbol
 
-        if _ttt_wins(game["board"], symbol):
+        line = _ttt_win_line(game["board"], symbol)
+        if line:
             game["scores"][uid] = game["scores"].get(uid, 0) + 1
             name = game["names"].get(uid, _user_display_name_from_id(uid))
-            _ttt_show_board(call, gid, game, prefix=f"🎉 Победил {symbol} — {name}!\n\n", finished=True)
-            # доска сбрасывается, счёт сохраняется для реванша
-            game["board"] = [" "] * 9
-            game["turn"] = p1
+            # Доска остаётся на экране до реванша, счёт переносится в следующую партию.
+            round_id = f"{gid}:{game.get('round', 1)}"
+            _record_game_result_once(uid, "ttt", "wins", round_id)
+            _record_game_result_once(p2 if uid == p1 else p1, "ttt", "losses", round_id)
+            _ttt_show_board(call, gid, game, prefix=f"🎉 Победил {symbol} — {name}!\n\n",
+                            finished=True, highlight=line)
             bot.answer_callback_query(call.id, "Победа!")
             return
 
         if " " not in game["board"]:
+            round_id = f"{gid}:{game.get('round', 1)}"
+            _record_game_result_once(p1, "ttt", "draws", round_id)
+            _record_game_result_once(p2, "ttt", "draws", round_id)
             _ttt_show_board(call, gid, game, prefix="🤝 Ничья!\n\n", finished=True)
-            game["board"] = [" "] * 9
-            game["turn"] = p1
             bot.answer_callback_query(call.id, "Ничья!")
             return
 
@@ -6952,8 +6988,12 @@ def ttt_restart(call):
         if not game:
             bot.answer_callback_query(call.id, "Игра не найдена.")
             return
+        # Первым ходит тот, кто в прошлой партии ходил вторым.
+        p1, p2 = game["players"]
+        starter = p1 if game.get("starter") == p2 else p2
         game["board"] = [" "] * 9
-        game["turn"] = game["players"][1]
+        game["starter"] = game["turn"] = starter
+        game["round"] = game.get("round", 1) + 1
         _ttt_show_board(call, gid, game)
         bot.answer_callback_query(call.id, "Новая партия — удачи!")
     except Exception as e:
@@ -7477,6 +7517,7 @@ def _new_pong_state():
         "winner": None,
         "loop_running": False,
         "inline_id": None,
+        "names": ["Игрок 1", "Игрок 2"],
     }
 
 def _pong_controls_markup(gid, started=False, game_over=False):
@@ -7492,16 +7533,24 @@ def _pong_controls_markup(gid, started=False, game_over=False):
         markup.add(types.InlineKeyboardButton("▶️ Старт", callback_data=f"pong_{gid}_start"))
     return markup
 
+def _pong_player_name(state, index):
+    names = state.get("names") or []
+    if index < len(names) and names[index]:
+        return names[index]
+    return f"Игрок {index + 1}"
+
+
 def _render_pong_text(state):
     score = state.get("score", [0, 0])
     lines = [
         "🏓 Пинг-понг",
-        f"Счёт: {score[0]} : {score[1]}",
+        f"◀️ {_pong_player_name(state, 0)} — {score[0]}",
+        f"▶️ {_pong_player_name(state, 1)} — {score[1]}",
+        f"До победы: {PONG_TARGET}",
     ]
     if state.get("winner") is not None:
-        winner_idx = state["winner"] + 1
         side = "слева" if state["winner"] == 0 else "справа"
-        lines.append(f"Победил Игрок {winner_idx} ({side})")
+        lines.append(f"🏆 Победил {_pong_player_name(state, state['winner'])} ({side})")
     elif not state.get("started"):
         lines.append("Подключитесь вдвоём и нажмите «Старт».")
     lines.append("")
@@ -7512,6 +7561,9 @@ def _pong_reset_ball(state, direction=None):
     dx = direction if direction in (-1, 1) else random.choice([-1, 1])
     dy = random.choice([-1, 1])
     state["ball"] = [5, random.randint(1, 5), dx, dy]
+
+PONG_TARGET = 5
+
 
 def _pong_step(state):
     W, H = 11, 7
@@ -7535,7 +7587,7 @@ def _pong_step(state):
         bx = p2x - 1
     elif bx < 0:
         state["score"][1] += 1
-        if state["score"][1] >= 5:
+        if state["score"][1] >= PONG_TARGET:
             state["winner"] = 1
             state["started"] = False
         else:
@@ -7543,7 +7595,7 @@ def _pong_step(state):
             return
     elif bx >= W:
         state["score"][0] += 1
-        if state["score"][0] >= 5:
+        if state["score"][0] >= PONG_TARGET:
             state["winner"] = 0
             state["started"] = False
         else:
@@ -7597,11 +7649,14 @@ def pong_callback(call):
             if uid in state["players"]:
                 bot.answer_callback_query(call.id, "Вы уже в игре")
                 return
+            player_name = call.from_user.first_name or call.from_user.username or f"Игрок {uid}"
             if state["players"][0] is None:
                 state["players"][0] = uid
+                state["names"][0] = player_name
                 msg = "Вы — Игрок 1 (слева)"
             elif state["players"][1] is None:
                 state["players"][1] = uid
+                state["names"][1] = player_name
                 msg = "Вы — Игрок 2 (справа)"
             else:
                 bot.answer_callback_query(call.id, "Пати заполнен.")
@@ -7625,12 +7680,21 @@ def pong_callback(call):
             return
 
         if action == "restart":
-            games_pong[gid] = _new_pong_state()
-            games_pong[gid]["inline_id"] = state.get("inline_id")
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"pong_{gid}_join"))
-            safe_edit_message(call, "🏓 Пинг-понг\nНажмите 'Присоединиться' чтобы игра началась.", reply_markup=markup)
-            bot.answer_callback_query(call.id, "Игра сброшена")
+            fresh = _new_pong_state()
+            fresh["inline_id"] = state.get("inline_id")
+            # Состав не сбрасываем: реванш начинают те же игроки.
+            fresh["players"] = list(state.get("players", [None, None]))
+            fresh["names"] = list(state.get("names", ["Игрок 1", "Игрок 2"]))
+            fresh["round"] = state.get("round", 1) + 1
+            games_pong[gid] = fresh
+            if all(fresh["players"]):
+                safe_edit_message(call, _render_pong_text(fresh),
+                                  reply_markup=_pong_controls_markup(gid, started=False))
+            else:
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"pong_{gid}_join"))
+                safe_edit_message(call, "🏓 Пинг-понг\nНажмите 'Присоединиться' чтобы игра началась.", reply_markup=markup)
+            bot.answer_callback_query(call.id, "Новая партия")
             return
 
         if action in ("U", "D"):
@@ -7887,38 +7951,136 @@ def hangman_callback(call):
         log_exception("hangman", e)
         bot.answer_callback_query(call.id, "Ошибка Виселицы")
 
-def render_minesweeper_board(board, revealed):
-    def cell(i, j):
-        if (i, j) not in revealed:
-            return "⬛ "
-        if board[i][j] == -1:
-            return "💣 "
-        return "⬜ " if board[i][j] == 0 else f"{board[i][j]}️⃣ "
+MINESWEEPER_DIGITS = ("⬜", "1\ufe0f\u20e3", "2\ufe0f\u20e3", "3\ufe0f\u20e3",
+                      "4\ufe0f\u20e3", "5\ufe0f\u20e3", "6\ufe0f\u20e3", "7\ufe0f\u20e3", "8\ufe0f\u20e3")
 
+
+def _minesweeper_new_game(size=5, mines=5):
+    board, mine_positions = generate_minesweeper_board(size, mines)
+    return {
+        "board": board,
+        "revealed": set(),
+        "mine_positions": set(mine_positions),
+        "flags": set(),
+        "flag_mode": False,
+        "finished": False,
+        "boom": None,
+    }
+
+
+def _minesweeper_neighbors(board, x, y):
     size = len(board)
-    return "".join("".join(cell(i, j) for j in range(size)) + "\n" for i in range(size))
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            nx, ny = x + dx, y + dy
+            if (dx or dy) and 0 <= nx < size and 0 <= ny < size:
+                yield nx, ny
 
-def _minesweeper_build_markup(gid, board, revealed):
+
+def _minesweeper_recount(board, mines):
+    """Пересчитывает числа на доске после переноса мины."""
+    size = len(board)
+    for i in range(size):
+        for j in range(size):
+            board[i][j] = -1 if (i, j) in mines else sum(
+                1 for nx, ny in _minesweeper_neighbors(board, i, j) if (nx, ny) in mines
+            )
+
+
+def _minesweeper_move_mine(game, x, y):
+    """Первый ход не должен быть проигрышным: уводим мину на свободную клетку."""
+    board, mines = game["board"], game["mine_positions"]
+    size = len(board)
+    free = [(i, j) for i in range(size) for j in range(size)
+            if (i, j) not in mines and (i, j) != (x, y)]
+    if not free:
+        return
+    mines.discard((x, y))
+    mines.add(random.choice(free))
+    _minesweeper_recount(board, mines)
+
+
+def _minesweeper_open(game, x, y):
+    """Открывает клетку и всю пустую область вокруг неё."""
+    board, revealed, flags = game["board"], game["revealed"], game["flags"]
+    stack = [(x, y)]
+    while stack:
+        cx, cy = stack.pop()
+        if (cx, cy) in revealed:
+            continue
+        revealed.add((cx, cy))
+        flags.discard((cx, cy))
+        if board[cx][cy] == 0:
+            stack.extend(n for n in _minesweeper_neighbors(board, cx, cy) if n not in revealed)
+
+
+def _minesweeper_safe_left(game):
+    size = len(game["board"])
+    return size * size - len(game["mine_positions"]) - len(game["revealed"])
+
+
+def _minesweeper_text(game, notice=None):
+    size = len(game["board"])
+    total = size * size - len(game["mine_positions"])
+    lines = ["💣 Сапёр", f"Мин: {len(game['mine_positions'])} · Флажков: {len(game['flags'])}"
+             f" · Открыто: {len(game['revealed'])}/{total}"]
+    if game.get("finished"):
+        lines.append(game.get("outcome", "Партия завершена."))
+    else:
+        lines.append("Режим: " + ("🚩 ставим флажки" if game.get("flag_mode") else "🔍 открываем клетки"))
+    if notice:
+        lines.append(notice)
+    return "\n".join(lines)
+
+
+def _minesweeper_cell_label(game, i, j):
+    value = game["board"][i][j]
+    if game.get("finished"):
+        if (i, j) == game.get("boom"):
+            return "💥"
+        if (i, j) in game["mine_positions"]:
+            return "🚩" if (i, j) in game["flags"] else "💣"
+        return MINESWEEPER_DIGITS[value] if (i, j) in game["revealed"] else "⬛"
+    if (i, j) in game["revealed"]:
+        return MINESWEEPER_DIGITS[value]
+    return "🚩" if (i, j) in game["flags"] else "⬛"
+
+
+def _minesweeper_build_markup(gid, game):
     markup = types.InlineKeyboardMarkup()
-    for i in range(len(board)):
+    size = len(game["board"])
+    finished = game.get("finished")
+    for i in range(size):
         markup.row(*[
-            types.InlineKeyboardButton("⬜", callback_data="none")
-            if (i, j) in revealed
-            else types.InlineKeyboardButton("⬛", callback_data=f"minesweeper_{gid}_{i}_{j}")
-            for j in range(len(board))
+            types.InlineKeyboardButton(
+                _minesweeper_cell_label(game, i, j),
+                callback_data="none" if finished or (i, j) in game["revealed"]
+                else f"minesweeper_{gid}_{i}_{j}",
+            )
+            for j in range(size)
         ])
+    if finished:
+        markup.row(types.InlineKeyboardButton("🔄 Новая игра", callback_data="minesweeper_new"))
+    else:
+        markup.row(
+            types.InlineKeyboardButton(
+                "🔍 Открывать" if game.get("flag_mode") else "🚩 Ставить флажки",
+                callback_data=f"minesweeper_{gid}_mode",
+            ),
+            types.InlineKeyboardButton("🔄 Новая игра", callback_data="minesweeper_new"),
+        )
     return markup
 
+
 def start_minesweeper_in_chat(chat_id):
-    board, mine_positions = generate_minesweeper_board()
     gid = short_id()
-    revealed = set()
-    minesweeper_games[gid] = {"board": board, "revealed": revealed, "mine_positions": mine_positions}
+    game = minesweeper_games[gid] = _minesweeper_new_game()
     bot.send_message(
         chat_id,
-        f"💣 Сапёр\n{render_minesweeper_board(board, revealed)}",
-        reply_markup=_minesweeper_build_markup(gid, board, revealed),
+        _minesweeper_text(game),
+        reply_markup=_minesweeper_build_markup(gid, game),
     )
+
 
 WORDGAME_ALPHABET = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 WORDGAME_TARGET = int(os.getenv("WORDGAME_TARGET", "5"))
@@ -7947,6 +8109,7 @@ def _wordgame_new(uid, name):
         "input": "",
         "used": [first.lower()],
         "finished": False,
+        "round": 1,
     }
 
 
@@ -7970,6 +8133,7 @@ def _wordgame_text(game, notice=None):
     p1, p2 = game["player1"], game["player2"]
     scores = game.get("scores", {})
     lines += [
+        f"Партия {game.get('round', 1)}",
         f"Слово: `{game['word'].upper()}`",
         f"Следующее — на букву «{_wordgame_required_letter(game['word']).upper()}»",
         "",
@@ -7997,6 +8161,7 @@ def _wordgame_kb(gid, game):
             callback_data=f"wordgame_join_{gid}"))
         return kb
     if game.get("finished"):
+        kb.add(types.InlineKeyboardButton("🔁 Реванш", callback_data=f"word_{gid}_again"))
         return kb
     row = []
     for i, letter in enumerate(WORDGAME_ALPHABET):
@@ -8011,6 +8176,24 @@ def _wordgame_kb(gid, game):
         types.InlineKeyboardButton("✅ Отправить", callback_data=f"word_{gid}_submit"),
     )
     return kb
+
+
+def _wordgame_restart(game):
+    """Реванш: новое слово, нулевой счёт, первым ходит проигравший."""
+    first = random.choice(WORD_LIST)
+    scores = game.get("scores", {})
+    p1, p2 = game["player1"], game["player2"]
+    loser = p1 if scores.get(p1, 0) < scores.get(p2, 0) else p2
+    game.update({
+        "word": first,
+        "used": [first.lower()],
+        "input": "",
+        "scores": {p1: 0, p2: 0},
+        "turn": loser,
+        "finished": False,
+        "round": game.get("round", 1) + 1,
+    })
+    game.pop("outcome", None)
 
 
 def _wordgame_validate(game, word):
@@ -8288,13 +8471,31 @@ def wordgame_move(call):
             return
         gid, token = parts[1], parts[2]
         game = word_games.get(gid)
-        if not game or game.get("finished"):
+        if not game:
             bot.answer_callback_query(call.id, "Игра завершена")
             return
 
         uid = call.from_user.id
         if uid not in (game.get("player1"), game.get("player2")):
             bot.answer_callback_query(call.id, "Вы не участник этой партии")
+            return
+
+        if token == "again":
+            if not game.get("finished"):
+                bot.answer_callback_query(call.id, "Партия ещё идёт")
+                return
+            _wordgame_restart(game)
+            bot.edit_message_text(
+                _wordgame_text(game),
+                inline_message_id=call.inline_message_id,
+                parse_mode="Markdown",
+                reply_markup=_wordgame_kb(gid, game),
+            )
+            bot.answer_callback_query(call.id, "Новая партия — удачи!")
+            return
+
+        if game.get("finished"):
+            bot.answer_callback_query(call.id, "Игра завершена")
             return
         if uid != game.get("turn"):
             bot.answer_callback_query(call.id, "Сейчас ход соперника")
@@ -8329,8 +8530,9 @@ def wordgame_move(call):
                     game["player2"] if uid == game["player1"] else game["player1"]
                 )
                 game["outcome"] = f"🏆 Победил {_wordgame_name(game, winner)}!"
-                _record_game_result_once(winner, "wordgame", "wins", gid)
-                _record_game_result_once(loser, "wordgame", "losses", gid)
+                round_id = f"{gid}:{game.get('round', 1)}"
+                _record_game_result_once(winner, "wordgame", "wins", round_id)
+                _record_game_result_once(loser, "wordgame", "losses", round_id)
             else:
                 game["turn"] = (
                     game["player2"] if uid == game["player1"] else game["player1"]
@@ -8347,8 +8549,6 @@ def wordgame_move(call):
             parse_mode="Markdown",
             reply_markup=_wordgame_kb(gid, game),
         )
-        if game.get("finished"):
-            word_games.pop(gid, None)
     except Exception as e:
         log_exception("wordgame_move", e, user_id=getattr(call.from_user, "id", None))
 
@@ -9107,9 +9307,11 @@ def private_ttt_callback(call):
         p1, p2 = game["players"]
         symbol = TTT_X if uid == p1 else "⭕"
         game["board"][cell] = symbol
-        if _ttt_wins(game["board"], symbol):
+        line = _ttt_win_line(game["board"], symbol)
+        if line:
             game["status"] = "ended"
             game["winner"] = uid
+            game["win_line"] = line
             game["scores"][uid] = game["scores"].get(uid, 0) + 1
             _pm_ttt_record_results(game)
         elif " " not in game["board"]:
@@ -9417,17 +9619,15 @@ def chess_callback(call):
 def inline_minesweeper(query):
     if not _inline_guard(query):
         return
-    board, mine_positions = generate_minesweeper_board()
     gid = short_id()
-    minesweeper_games[gid] = {"board": board, "revealed": set(), "mine_positions": mine_positions}
+    game = minesweeper_games[gid] = _minesweeper_new_game()
     uid = query.from_user.id
     results = [types.InlineQueryResultArticle(
         id=f"minesweeper_{gid}",
         title=f"💣 {get_game_title(uid, 'minesweeper')}",
         description=get_game_description(uid, "minesweeper"),
-        input_message_content=types.InputTextMessageContent(
-            f"💣 {get_game_title(uid, 'minesweeper')}\n{render_minesweeper_board(board, set())}"),
-        reply_markup=_minesweeper_build_markup(gid, board, set())
+        input_message_content=types.InputTextMessageContent(_minesweeper_text(game)),
+        reply_markup=_minesweeper_build_markup(gid, game)
     )]
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
 
@@ -9435,28 +9635,78 @@ def inline_minesweeper(query):
 def minesweeper_callback(call):
     _track_callback_game_play(call)
     try:
-        _, gid, x, y = call.data.split("_")
-        x, y = int(x), int(y)
+        parts = call.data.split("_")
+
+        if parts[1] == "new":
+            gid = short_id()
+            game = minesweeper_games[gid] = _minesweeper_new_game()
+            safe_edit_message(call, _minesweeper_text(game),
+                              reply_markup=_minesweeper_build_markup(gid, game))
+            bot.answer_callback_query(call.id, "Новое поле!")
+            return
+
+        gid = parts[1]
         game = minesweeper_games.get(gid)
-        if not game:
+        if not game or game.get("finished"):
             bot.answer_callback_query(call.id, "Игра завершена!")
             return
-        board = game["board"]; revealed = game["revealed"]; mine_positions = game["mine_positions"]
-        if (x, y) in mine_positions:
-            safe_edit_message(call, f"💥 Вы наткнулись на мину!\n\n{render_minesweeper_board(board, revealed.union(mine_positions))}")
+
+        if parts[2] == "mode":
+            game["flag_mode"] = not game.get("flag_mode")
+            safe_edit_message(call, _minesweeper_text(game),
+                              reply_markup=_minesweeper_build_markup(gid, game))
+            bot.answer_callback_query(
+                call.id, "🚩 Режим флажков" if game["flag_mode"] else "🔍 Режим открытия")
+            return
+
+        x, y = int(parts[2]), int(parts[3])
+        if (x, y) in game["revealed"]:
+            bot.answer_callback_query(call.id, "Клетка уже открыта")
+            return
+
+        if game.get("flag_mode"):
+            if (x, y) in game["flags"]:
+                game["flags"].discard((x, y))
+                note = "Флажок снят"
+            else:
+                game["flags"].add((x, y))
+                note = "🚩 Флажок поставлен"
+            safe_edit_message(call, _minesweeper_text(game),
+                              reply_markup=_minesweeper_build_markup(gid, game))
+            bot.answer_callback_query(call.id, note)
+            return
+
+        if (x, y) in game["flags"]:
+            bot.answer_callback_query(call.id, "Снимите флажок, чтобы открыть клетку")
+            return
+
+        # Первый ход не должен подрываться на мине.
+        if not game["revealed"] and (x, y) in game["mine_positions"]:
+            _minesweeper_move_mine(game, x, y)
+
+        if (x, y) in game["mine_positions"]:
+            game["finished"] = True
+            game["boom"] = (x, y)
+            game["outcome"] = "💥 Вы наткнулись на мину!"
             _record_game_result_once(call.from_user.id, "minesweeper", "losses", gid)
-            minesweeper_games.pop(gid, None)
-            bot.answer_callback_query(call.id)
+            safe_edit_message(call, _minesweeper_text(game),
+                              reply_markup=_minesweeper_build_markup(gid, game))
+            bot.answer_callback_query(call.id, "💥 Мина!")
             return
-        revealed.add((x, y))
-        if len(revealed) == len(board)*len(board) - len(mine_positions):
-            safe_edit_message(call, f"🎉 Вы выиграли!\n\n{render_minesweeper_board(board, revealed.union(mine_positions))}")
+
+        _minesweeper_open(game, x, y)
+        if _minesweeper_safe_left(game) == 0:
+            game["finished"] = True
+            game["flags"] = set(game["mine_positions"])
+            game["outcome"] = "🎉 Поле разминировано!"
             _record_game_result_once(call.from_user.id, "minesweeper", "wins", gid)
-            minesweeper_games.pop(gid, None)
-            bot.answer_callback_query(call.id)
+            safe_edit_message(call, _minesweeper_text(game),
+                              reply_markup=_minesweeper_build_markup(gid, game))
+            bot.answer_callback_query(call.id, "🎉 Победа!")
             return
-        markup = _minesweeper_build_markup(gid, board, revealed)
-        safe_edit_message(call, f"💣 Сапёр\n{render_minesweeper_board(board, revealed)}", reply_markup=markup)
+
+        safe_edit_message(call, _minesweeper_text(game),
+                          reply_markup=_minesweeper_build_markup(gid, game))
         bot.answer_callback_query(call.id)
     except Exception as e:
         log_exception("mine", e)
