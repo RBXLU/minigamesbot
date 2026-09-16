@@ -7920,6 +7920,111 @@ def start_minesweeper_in_chat(chat_id):
         reply_markup=_minesweeper_build_markup(gid, board, revealed),
     )
 
+WORDGAME_ALPHABET = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+WORDGAME_TARGET = int(os.getenv("WORDGAME_TARGET", "5"))
+WORDGAME_MIN_LEN = 3
+#: На эти буквы слова не начинаются — берём предыдущую подходящую.
+WORDGAME_SKIP_TAIL = "ьъы"
+
+
+def _wordgame_required_letter(word):
+    for ch in reversed(str(word or "").lower()):
+        if ch not in WORDGAME_SKIP_TAIL:
+            return ch
+    return ""
+
+
+def _wordgame_new(uid, name):
+    first = random.choice(WORD_LIST)
+    return {
+        "word": first,
+        "player1": uid,
+        "p1_name": name,
+        "player2": None,
+        "p2_name": None,
+        "scores": {},
+        "turn": None,
+        "input": "",
+        "used": [first.lower()],
+        "finished": False,
+    }
+
+
+def _wordgame_name(game, uid):
+    if uid == game.get("player1"):
+        return game.get("p1_name") or "Игрок 1"
+    return game.get("p2_name") or "Игрок 2"
+
+
+def _wordgame_text(game, notice=None):
+    lines = ["📝 *Словесная дуэль*", ""]
+    if game.get("player2") is None:
+        lines += [
+            f"Слово: `{game['word'].upper()}`",
+            "",
+            f"{game.get('p1_name', 'Игрок 1')} ждёт соперника.",
+            "Нажмите «Присоединиться», чтобы начать.",
+        ]
+        return "\n".join(lines)
+
+    p1, p2 = game["player1"], game["player2"]
+    scores = game.get("scores", {})
+    lines += [
+        f"Слово: `{game['word'].upper()}`",
+        f"Следующее — на букву «{_wordgame_required_letter(game['word']).upper()}»",
+        "",
+        f"{game.get('p1_name', 'Игрок 1')}: {scores.get(p1, 0)}",
+        f"{game.get('p2_name', 'Игрок 2')}: {scores.get(p2, 0)}",
+        f"До победы: {WORDGAME_TARGET}",
+        "",
+    ]
+    if game.get("finished"):
+        lines.append(game.get("outcome", "Партия завершена."))
+        return "\n".join(lines)
+
+    lines.append(f"Ходит: {_wordgame_name(game, game.get('turn'))}")
+    lines.append(f"Набрано: `{(game.get('input') or '').upper() or '—'}`")
+    if notice:
+        lines += ["", notice]
+    return "\n".join(lines)
+
+
+def _wordgame_kb(gid, game):
+    kb = types.InlineKeyboardMarkup()
+    if game.get("player2") is None:
+        kb.add(types.InlineKeyboardButton(
+            localized_text(game.get("player1"), "Присоединиться", "Join", "Приєднатися"),
+            callback_data=f"wordgame_join_{gid}"))
+        return kb
+    if game.get("finished"):
+        return kb
+    row = []
+    for i, letter in enumerate(WORDGAME_ALPHABET):
+        row.append(types.InlineKeyboardButton(letter.upper(), callback_data=f"word_{gid}_l{letter}"))
+        if len(row) == 6:
+            kb.row(*row)
+            row = []
+    if row:
+        kb.row(*row)
+    kb.row(
+        types.InlineKeyboardButton("⌫ Стереть", callback_data=f"word_{gid}_del"),
+        types.InlineKeyboardButton("✅ Отправить", callback_data=f"word_{gid}_submit"),
+    )
+    return kb
+
+
+def _wordgame_validate(game, word):
+    """Возвращает текст ошибки либо None, если слово принимается."""
+    need = _wordgame_required_letter(game["word"])
+    if len(word) < WORDGAME_MIN_LEN:
+        return f"Слишком короткое слово: минимум {WORDGAME_MIN_LEN} буквы."
+    if need and word[0] != need:
+        return f"Слово должно начинаться на «{need.upper()}»."
+    if word in game.get("used", []):
+        return "Это слово уже было."
+    return None
+
+
 @bot.inline_handler(lambda q: q.query.lower() in ("слова", "word_duel"))
 def inline_word_duel(query):
     if not _inline_guard(query):
@@ -7927,14 +8032,11 @@ def inline_word_duel(query):
 
     gid = short_id()
     uid = query.from_user.id
-    first_word = random.choice(WORD_LIST)
-    word_games[gid] = {
-        "word": first_word,
-        "player1": uid,
-        "p1_name": query.from_user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"),
-        "player2": None,
-        "scores": {}
-    }
+    word_games[gid] = _wordgame_new(
+        uid,
+        query.from_user.first_name or localized_text(uid, "Игрок 1", "Player 1", "Гравець 1"),
+    )
+    first_word = word_games[gid]["word"]
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton(
@@ -8177,6 +8279,80 @@ def mafia_callback(call):
             pass
 
 
+@bot.callback_query_handler(func=lambda c: c.data.startswith("word_"))
+def wordgame_move(call):
+    _track_callback_game_play(call)
+    try:
+        parts = call.data.split("_", 2)
+        if len(parts) < 3:
+            return
+        gid, token = parts[1], parts[2]
+        game = word_games.get(gid)
+        if not game or game.get("finished"):
+            bot.answer_callback_query(call.id, "Игра завершена")
+            return
+
+        uid = call.from_user.id
+        if uid not in (game.get("player1"), game.get("player2")):
+            bot.answer_callback_query(call.id, "Вы не участник этой партии")
+            return
+        if uid != game.get("turn"):
+            bot.answer_callback_query(call.id, "Сейчас ход соперника")
+            return
+
+        notice = None
+        if token.startswith("l"):
+            letter = token[1:]
+            if letter not in WORDGAME_ALPHABET:
+                return
+            if len(game.get("input", "")) >= 24:
+                bot.answer_callback_query(call.id, "Слово слишком длинное")
+                return
+            game["input"] = game.get("input", "") + letter
+            bot.answer_callback_query(call.id)
+        elif token == "del":
+            game["input"] = game.get("input", "")[:-1]
+            bot.answer_callback_query(call.id)
+        elif token == "submit":
+            word = (game.get("input") or "").strip().lower()
+            error = _wordgame_validate(game, word)
+            if error:
+                bot.answer_callback_query(call.id, error, show_alert=True)
+                return
+            game["used"].append(word)
+            game["word"] = word
+            game["input"] = ""
+            game["scores"][uid] = game["scores"].get(uid, 0) + 1
+            if game["scores"][uid] >= WORDGAME_TARGET:
+                game["finished"] = True
+                winner, loser = uid, (
+                    game["player2"] if uid == game["player1"] else game["player1"]
+                )
+                game["outcome"] = f"🏆 Победил {_wordgame_name(game, winner)}!"
+                _record_game_result_once(winner, "wordgame", "wins", gid)
+                _record_game_result_once(loser, "wordgame", "losses", gid)
+            else:
+                game["turn"] = (
+                    game["player2"] if uid == game["player1"] else game["player1"]
+                )
+                notice = f"✅ Принято: {word.upper()}"
+            bot.answer_callback_query(call.id, "Принято!")
+        else:
+            return
+
+        text = _wordgame_text(game, notice)
+        bot.edit_message_text(
+            text,
+            inline_message_id=call.inline_message_id,
+            parse_mode="Markdown",
+            reply_markup=_wordgame_kb(gid, game),
+        )
+        if game.get("finished"):
+            word_games.pop(gid, None)
+    except Exception as e:
+        log_exception("wordgame_move", e, user_id=getattr(call.from_user, "id", None))
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("wordgame_join_"))
 def wordgame_join(call):
     _track_callback_game_play(call)
@@ -8188,31 +8364,21 @@ def wordgame_join(call):
             return
         
         if game["player2"] is None:
-            game["player2"] = call.from_user.id
+            joiner = call.from_user.id
+            if joiner == game.get("player1"):
+                bot.answer_callback_query(call.id, "Нельзя играть с самим собой", show_alert=True)
+                return
+            game["player2"] = joiner
             game["p2_name"] = call.from_user.first_name or "Игрок 2"
-            game["scores"][call.from_user.id] = 0
-            game["scores"][game["player1"]] = 0
-            
-            text = f"📝 *Словесная дуэль*\n\n"
-            text += f"Слово: `{game['word'].upper()}`\n"
-            text += f"{game.get('p1_name', 'Игрок 1')}\n"
-            text += f"{game.get('p2_name', 'Игрок 2')}\n\n"
-            text += f"⏳ Ожидание начала игры...\n"
-            text += f"Следующее слово должно начинаться на '{game['word'][-1].upper()}'\n\n"
-            text += f"Оба игрока готовы! Поиграем!"
-            
-            kb = types.InlineKeyboardMarkup()
-            row = []
-            for i, letter in enumerate("абвгдежзийклмнопрстуфхцчшщъyэюя".replace('y','й')):
-                if i % 5 == 0 and i > 0:
-                    kb.row(*row)
-                    row = []
-                row.append(types.InlineKeyboardButton(letter.upper(), callback_data=f"word_{gid}_{letter}"))
-            if row:
-                kb.row(*row)
-            kb.add(types.InlineKeyboardButton("✅ Отправить слово", callback_data=f"word_{gid}_submit"))
-            
-            bot.edit_message_text(text, inline_message_id=call.inline_message_id, parse_mode="Markdown", reply_markup=kb)
+            game["scores"] = {game["player1"]: 0, joiner: 0}
+            # Первое слово уже дано создателю, поэтому ходит присоединившийся.
+            game["turn"] = joiner
+            bot.edit_message_text(
+                _wordgame_text(game),
+                inline_message_id=call.inline_message_id,
+                parse_mode="Markdown",
+                reply_markup=_wordgame_kb(gid, game),
+            )
             bot.answer_callback_query(call.id, "✅ Вы присоединились!")
         else:
             bot.answer_callback_query(call.id, "Игрок уже присоединился", show_alert=True)
