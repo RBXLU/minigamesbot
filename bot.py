@@ -1527,6 +1527,30 @@ def _record_game_result(user_id, game_key, result, extra=None):
     _check_achievements(user_id, rec)
 
 
+def _record_game_result_once(user_id, game_key, result, session_id, extra=None):
+    """Итог партии засчитывается один раз.
+
+    Обработчики вызываются повторно — перерисовка доски, повторное нажатие той
+    же кнопки, — а победа в счёте должна вырасти однажды.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        _record_game_result(user_id, game_key, result, extra=extra)
+        return
+    d = load_data()
+    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
+    seen = rec.get("scored_sessions")
+    if not isinstance(seen, list):
+        seen = []
+    uniq = f"{game_key}:{sid}"
+    if uniq in seen:
+        return
+    seen.append(uniq)
+    rec["scored_sessions"] = seen[-1000:]
+    save_data(d)
+    _record_game_result(user_id, game_key, result, extra=extra)
+
+
 def _render_replay_text(uid):
     d = load_data()
     rec = _ensure_profile_fields(d.get("users", {}).get(str(uid), {}))
@@ -1978,6 +2002,17 @@ def _room_close(code, reason=""):
         pass
     return True
 
+def _games_watchdog(interval=60):
+    """Раз в минуту выгружает партии, которые создались и остались без игрока."""
+    while not _shutdown_event.wait(interval):
+        try:
+            dropped = sum(store.sweep(GAME_JOIN_TIMEOUT) for store in _GAME_STORES)
+            if dropped:
+                LOGGER.info("Выгружено партий без игроков: %s", dropped)
+        except Exception as e:
+            log_exception("games_watchdog", e)
+
+
 def _rooms_watchdog():
     while not _shutdown_event.is_set():
         try:
@@ -2407,24 +2442,43 @@ questions = [
 # ограниченное число, вытесняя те, к которым дольше всего не обращались: активная
 # партия остаётся, пока в неё играют.
 GAME_SESSIONS_LIMIT = int(os.getenv("GAME_SESSIONS_LIMIT", "400"))
+GAME_JOIN_TIMEOUT = int(os.getenv("GAME_JOIN_TIMEOUT", "300"))
+_GAME_STORES = []
 
 
 class BoundedGames(OrderedDict):
-    __slots__ = ("_limit",)
+    __slots__ = ("_limit", "_born", "_opened")
+
+    #: инлайн-превью читает свежую сессию тут же, при сборке ответа, — за
+    #: миллисекунды. Живой игрок нажимает кнопку заметно позже, так что
+    #: обращение спустя эту паузу и означает «в партию зашли».
+    OPEN_AFTER = 1.0
 
     def __init__(self, limit=None):
         super().__init__()
         self._limit = limit or GAME_SESSIONS_LIMIT
+        self._born = {}
+        self._opened = set()
+        _GAME_STORES.append(self)
+
+    def _forget(self, key):
+        self._born.pop(key, None)
+        self._opened.discard(key)
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         self.move_to_end(key)
+        self._born[key] = time.monotonic()
+        self._opened.discard(key)
         while len(self) > self._limit:
-            self.popitem(last=False)
+            stale, _ = self.popitem(last=False)
+            self._forget(stale)
 
     def __getitem__(self, key):
         value = super().__getitem__(key)
         self.move_to_end(key)
+        if time.monotonic() - self._born.get(key, 0) > self.OPEN_AFTER:
+            self._opened.add(key)
         return value
 
     def get(self, key, default=None):
@@ -2432,6 +2486,25 @@ class BoundedGames(OrderedDict):
             return self[key]
         except KeyError:
             return default
+
+    def pop(self, key, *default):
+        self._forget(key)
+        return super().pop(key, *default)
+
+    def __delitem__(self, key):
+        self._forget(key)
+        super().__delitem__(key)
+
+    def sweep(self, timeout):
+        """Выгружает партии, в которые так и не зашли за отведённое время."""
+        now = time.monotonic()
+        stale = [
+            key for key in list(self)
+            if key not in self._opened and now - self._born.get(key, now) > timeout
+        ]
+        for key in stale:
+            self.pop(key, None)
+        return len(stale)
 
 
 inline_ttt_games = BoundedGames()
@@ -3186,6 +3259,13 @@ def iduel_move(call):
         winner = st["names"].get(p1) if s1 > s2 else (st["names"].get(p2) if s2 > s1 else None)
         outcome = f"🏆 Победитель: {winner}!" if winner else "🤝 Ничья!"
         st["status"] = "ended"
+        if s1 == s2:
+            _record_game_result_once(p1, "iduel", "draws", gid)
+            _record_game_result_once(p2, "iduel", "draws", gid)
+        else:
+            winner, loser = (p1, p2) if s1 > s2 else (p2, p1)
+            _record_game_result_once(winner, "iduel", "wins", gid)
+            _record_game_result_once(loser, "iduel", "losses", gid)
         inline_duel_games.pop(gid, None)
         _edit(f"⚔️ Дуэль завершена\n{round_line}\n{_iduel_score_line(st)}\n{outcome}")
     else:
@@ -6427,6 +6507,7 @@ def guess_inline_callback(call):
 
         if guess == state["target"]:
             bot.edit_message_text(f"✅ Правильно! Загаданное число: {state['target']}", inline_message_id=mid)
+            _record_game_result_once(call.from_user.id, "guess", "wins", mid)
             inline_guess_games.pop(mid, None)
             bot.answer_callback_query(call.id, "Правильно!")
             return
@@ -6490,6 +6571,7 @@ def snake_callback(call):
         W, H = state["W"], state["H"]
         if new_head[0] < 0 or new_head[0] >= W or new_head[1] < 0 or new_head[1] >= H or new_head in state["snake"]:
             bot.edit_message_text(f"💥 Вы проиграли! Очки: {state['score']}", inline_message_id=mid)
+            _record_game_result_once(call.from_user.id, "snake", "losses", mid)
             inline_snake_games.pop(mid, None)
             bot.answer_callback_query(call.id, "Игра окончена")
             return
@@ -6562,6 +6644,9 @@ def hide_secret(call):
 
     if game["attempts"] <= 0:
         game["finished"] = True
+        _record_game_result_once(call.from_user.id, "hide", "losses", gid)
+        if game.get("host"):
+            _record_game_result_once(game["host"], "hide", "wins", gid)
         bot.edit_message_text(
             f"💀 *Попытки закончились!*\nКлетка была: {game['secret'] + 1}",
             inline_message_id=call.inline_message_id,
@@ -6573,6 +6658,9 @@ def hide_secret(call):
 
     if game.get("secret") == cell:
         game["finished"] = True
+        _record_game_result_once(call.from_user.id, "hide", "wins", gid)
+        if game.get("host"):
+            _record_game_result_once(game["host"], "hide", "losses", gid)
         try:
             bot.edit_message_text(
                 f"🎉 *Угадали!*\nКлетка: {cell + 1}",
@@ -7183,14 +7271,17 @@ def rps_callback(call):
 
         if user_choice == bot_choice:
             result = "🤝 Ничья!"
+            _record_game_result_once(call.from_user.id, "rps", "draws", gid)
         elif (
             (user_choice == "rock" and bot_choice == "scissors") or
             (user_choice == "scissors" and bot_choice == "paper") or
             (user_choice == "paper" and bot_choice == "rock")
         ):
             result = "🎉 Вы победили!"
+            _record_game_result_once(call.from_user.id, "rps", "wins", gid)
         else:
             result = "😢 Вы проиграли"
+            _record_game_result_once(call.from_user.id, "rps", "losses", gid)
 
         text = (
             "✂️ *Камень • Ножницы • Бумага*\n\n"
@@ -7331,6 +7422,7 @@ def g2048_callback(call):
         flat = sum(new_board, [])
         if 2048 in flat:
             bot.edit_message_text("🎉 Вы собрали 2048! Победа!", inline_message_id=call.inline_message_id)
+            _record_game_result_once(call.from_user.id, "g2048", "wins", gid)
             games_2048.pop(gid, None)
             bot.answer_callback_query(call.id)
             return
@@ -7586,11 +7678,13 @@ def millionaire_callback(call):
         answer = question["options"][index]
         if answer == question["answer"]:
             bot.edit_message_text(f"🎉 Правильно! Ответ: {answer}", inline_message_id=call.inline_message_id)
+            _record_game_result_once(call.from_user.id, "millionaire", "wins", game_id)
             millionaire_games.pop(game_id, None)
             return
         game["attempts"] -= 1
         if game["attempts"] == 0:
             bot.edit_message_text(f"💀 Вы проиграли!\nПравильный ответ: {question['answer']}", inline_message_id=call.inline_message_id)
+            _record_game_result_once(call.from_user.id, "millionaire", "losses", game_id)
             millionaire_games.pop(game_id, None)
             return
         markup = types.InlineKeyboardMarkup()
@@ -7778,8 +7872,10 @@ def hangman_callback(call):
         text = render_hangman_state(game)
         if _hangman_word_guessed(game):
             text += f"\n\n🎉 Вы выиграли! Слово: {word.upper()}"
+            _record_game_result_once(call.from_user.id, "hangman", "wins", gid)
         elif len(wrong) >= attempts:
             text += f"\n\n💀 Вы проиграли! Слово: {word.upper()}"
+            _record_game_result_once(call.from_user.id, "hangman", "losses", gid)
 
         bot.edit_message_text(
             text,
@@ -7954,6 +8050,12 @@ def _mafia_finish_if_over(game):
         return False
     game["phase"] = "ended"
     game["last_event"] = "\U0001f3c6 Победили мирные жители!" if winner == "citizens" else "\U0001f480 Победила мафия!"
+    session = str(game.get("gid") or game.get("created_at") or id(game))
+    roles = game.get("roles") or {}
+    for player in game.get("players", []) or []:
+        is_mafia = roles.get(player) == "mafia"
+        won = is_mafia if winner == "mafia" else not is_mafia
+        _record_game_result_once(player, "mafia", "wins" if won else "losses", session)
     return True
 
 
@@ -8240,8 +8342,12 @@ def quiz_input(call):
 
             if game["correct"][uid]:
                 text = f"🎉 {game['names'].get(uid, 'Игрок')} выиграл!\n\n"
+                for player in game["players"]:
+                    _record_game_result_once(player, "quizgame", "wins" if player == uid else "losses", gid)
             elif all(game["answered"].get(p, False) for p in game["players"]):
                 text = "🤷 Никто не угадал.\n\n"
+                for player in game["players"]:
+                    _record_game_result_once(player, "quizgame", "draws", gid)
             else:
                 bot.answer_callback_query(call.id, "Неверно. Ждём ответы остальных.")
                 return
@@ -8388,10 +8494,16 @@ def combo_choice(call):
         s1, s2 = game["scores"].get(p1, 0), game["scores"].get(p2, 0)
         if s1 > s2:
             text += f"\n\n🏆 {p1_name} победил!"
+            _record_game_result_once(p1, "combogame", "wins", gid)
+            _record_game_result_once(p2, "combogame", "losses", gid)
         elif s2 > s1:
             text += f"\n\n🏆 {p2_name} победил!"
+            _record_game_result_once(p2, "combogame", "wins", gid)
+            _record_game_result_once(p1, "combogame", "losses", gid)
         else:
             text += "\n\n🤝 Ничья!"
+            _record_game_result_once(p1, "combogame", "draws", gid)
+            _record_game_result_once(p2, "combogame", "draws", gid)
         bot.edit_message_text(text, inline_message_id=call.inline_message_id, parse_mode="Markdown")
         combo_games.pop(gid, None)
     except Exception as e:
@@ -8463,8 +8575,10 @@ def wordle_callback(call):
             game["current"] = ""
             if guess == game["target"]:
                 game["status"] = "won"
+                _record_game_result_once(call.from_user.id, "wordle", "wins", gid)
             elif len(game["attempts"]) >= 6:
                 game["status"] = "lost"
+                _record_game_result_once(call.from_user.id, "wordle", "losses", gid)
             safe_edit_message(call, _wordle_render_text(game), reply_markup=_wordle_keyboard(gid, game))
             bot.answer_callback_query(call.id)
             return
@@ -8984,6 +9098,8 @@ def battleship_callback(call):
                 if enemy_ships.issubset(my_shots):
                     game["status"] = "ended"
                     game["winner"] = uid
+                    _record_game_result_once(uid, "bship", "wins", gid)
+                    _record_game_result_once(enemy, "bship", "losses", gid)
                     _bship_sync_views(gid, game, call=call)
                     _safe_ack("Попадание! Вы победили")
                     return
@@ -9094,6 +9210,14 @@ def chess_callback(call):
                 legal = set(_chess_legal_moves(board, sr, sc))
                 if (r, c) in legal:
                     _chess_apply_move(game, sr, sc, r, c)
+                    if game.get("status") == "ended":
+                        winner_side = game.get("winner")
+                        winner = game.get("p1") if winner_side == "w" else game.get("p2")
+                        loser = game.get("p2") if winner_side == "w" else game.get("p1")
+                        if winner:
+                            _record_game_result_once(winner, "chess", "wins", gid)
+                        if loser:
+                            _record_game_result_once(loser, "chess", "losses", gid)
                     _chess_refresh_views(gid, game, call=call)
                     bot.answer_callback_query(call.id, "Ход выполнен")
                     return
@@ -9154,12 +9278,14 @@ def minesweeper_callback(call):
         board = game["board"]; revealed = game["revealed"]; mine_positions = game["mine_positions"]
         if (x, y) in mine_positions:
             safe_edit_message(call, f"💥 Вы наткнулись на мину!\n\n{render_minesweeper_board(board, revealed.union(mine_positions))}")
+            _record_game_result_once(call.from_user.id, "minesweeper", "losses", gid)
             minesweeper_games.pop(gid, None)
             bot.answer_callback_query(call.id)
             return
         revealed.add((x, y))
         if len(revealed) == len(board)*len(board) - len(mine_positions):
             safe_edit_message(call, f"🎉 Вы выиграли!\n\n{render_minesweeper_board(board, revealed.union(mine_positions))}")
+            _record_game_result_once(call.from_user.id, "minesweeper", "wins", gid)
             minesweeper_games.pop(gid, None)
             bot.answer_callback_query(call.id)
             return
@@ -10400,6 +10526,7 @@ if __name__ == "__main__":
         Thread(target=run_webapp_server, daemon=True).start()
     Thread(target=keep_alive, daemon=True).start()
     Thread(target=_rooms_watchdog, daemon=True).start()
+    Thread(target=_games_watchdog, daemon=True).start()
     _setup_webapp_menu_button()
     if _DB_RECOVERY_NOTE:
         _send_admin_alert(f"⚠️ <b>База данных восстановлена при старте</b>\n{html.escape(_DB_RECOVERY_NOTE)}")
