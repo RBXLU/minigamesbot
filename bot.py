@@ -423,33 +423,38 @@ GAME_DESCRIPTIONS_LANG = {
     },
 }
 
+WHATS_NEW_VERSION = "1.1.0"
+
 WHATS_NEW_ITEMS = {
     "ru": [
-        "Реферальная система: пригласите друга по ссылке из «🤝 Пригласить друга» — 100 🪙 за каждого активного друга и бонусы за 5, 10 и 20 друзей.",
-        "Сапёр переделан: на кнопках видно цифры и мины, пустая область открывается целиком, появились флажки, а первый ход больше не подрывается.",
-        "Крестики-нолики: выигрышная линия подсвечивается, видно чей ход по имени, реванш начинает тот, кто ходил вторым.",
-        "Словесная дуэль заработала полностью — буквы, проверка слова, счёт и реванш.",
-        "Пинг-понг вышел из разработки: имена игроков, счёт серии и рабочая кнопка новой игры.",
-        "Камень-ножницы-бумага теперь считает серию, виселица показывает верные и неверные буквы, викторина — длину ответа.",
-        "Бот опенсорсный: github.com/RBXLU/minigamesbot",
+        "✅ Исправлено большинство найденных ошибок в играх: партии снова засчитываются, игры больше не ломаются.",
+        "🎮 Обновлены игры: переделан сапёр (флажки, цифры на кнопках), в крестиках-ноликах подсвечивается "
+        "выигрышная линия, словесная дуэль заработала полностью, у многих игр появился реванш.",
+        "👥 Реферальная система. Возьмите свою ссылку в меню «🤝 Пригласить друга» или командой /ref и отправьте другу.\n"
+        "  – Друг, который ещё ни разу не запускал бота, сразу получает 50 монет.\n"
+        "  – Когда друг сыграет 3 партии в 2 разных дня, вы получаете 100 монет.\n"
+        "  – Бонусы: за 5 друзей +500, за 10 — +1000, за 20 — +3000 монет (сверх обычных 100 за каждого).\n"
+        "  – В день засчитывается до 10 друзей, остальные — на следующий день.",
     ],
     "en": [
-        "Referrals: invite friends with the link from «🤝 Invite a friend» — 100 🪙 per active friend plus bonuses at 5, 10 and 20 friends.",
-        "Minesweeper reworked: buttons show numbers and mines, empty areas open at once, flags are in, and the first tap can no longer blow up.",
-        "Tic-tac-toe: the winning line is highlighted, the turn line names the player, and the rematch starts with whoever went second.",
-        "The word duel is fully playable now — letters, word checks, scoring and a rematch.",
-        "Ping-pong is out of development: player names, series score and a working new-game button.",
-        "Rock-paper-scissors keeps a series score, hangman marks right and wrong letters, the quiz shows the answer length.",
-        "The bot is open-source: github.com/RBXLU/minigamesbot",
+        "✅ Fixed most of the bugs found in games: matches are counted again and games no longer break.",
+        "🎮 Games updated: minesweeper reworked (flags, numbers on buttons), tic-tac-toe highlights "
+        "the winning line, the word duel is fully playable, and many games got a rematch.",
+        "👥 Referral system. Get your link from «🤝 Invite a friend» or with /ref and send it to a friend.\n"
+        "  – A friend who has never started the bot gets 50 coins right away.\n"
+        "  – Once your friend plays 3 games on 2 different days, you get 100 coins.\n"
+        "  – Bonuses: 5 friends +500, 10 — +1000, 20 — +3000 coins (on top of the usual 100 each).\n"
+        "  – Up to 10 friends count per day, the rest carry over to the next day.",
     ],
     "uk": [
-        "Реферальна система: запросіть друга за посиланням із «🤝 Запросити друга» — 100 🪙 за кожного активного друга та бонуси за 5, 10 і 20 друзів.",
-        "Сапер перероблено: на кнопках видно цифри та міни, порожня область відкривається повністю, з'явилися прапорці, а перший хід більше не підривається.",
-        "Хрестики-нулики: виграшна лінія підсвічується, видно чий хід за іменем, реванш починає той, хто ходив другим.",
-        "Словесна дуель запрацювала повністю — літери, перевірка слова, рахунок і реванш.",
-        "Пінг-понг вийшов із розробки: імена гравців, рахунок серії та робоча кнопка нової гри.",
-        "Камінь-ножиці-папір рахує серію, шибениця показує вірні та невірні літери, вікторина — довжину відповіді.",
-        "Бот з відкритим кодом: github.com/RBXLU/minigamesbot",
+        "✅ Виправлено більшість знайдених помилок в іграх: партії знову зараховуються, ігри більше не ламаються.",
+        "🎮 Оновлено ігри: перероблено сапер (прапорці, цифри на кнопках), у хрестиках-нуликах підсвічується "
+        "виграшна лінія, словесна дуель запрацювала повністю, у багатьох ігор з'явився реванш.",
+        "👥 Реферальна система. Візьміть своє посилання в меню «🤝 Запросити друга» або командою /ref і надішліть другу.\n"
+        "  – Друг, який ще жодного разу не запускав бота, одразу отримує 50 монет.\n"
+        "  – Коли друг зіграє 3 партії у 2 різні дні, ви отримуєте 100 монет.\n"
+        "  – Бонуси: за 5 друзів +500, за 10 — +1000, за 20 — +3000 монет (понад звичайні 100 за кожного).\n"
+        "  – На день зараховується до 10 друзів, решта — наступного дня.",
     ],
 }
 
@@ -2058,9 +2063,16 @@ def _render_help_text(uid):
 
 
 def _render_whats_new_text(uid):
-    title = localized_text(uid, "🆕 Что нового", "🆕 What's New", "🆕 Що нового")
+    header = localized_text(
+        uid,
+        f"🔄 Обновление {WHATS_NEW_VERSION}\n(Stable ветка)!",
+        f"🔄 Update {WHATS_NEW_VERSION}\n(Stable branch)!",
+        f"🔄 Оновлення {WHATS_NEW_VERSION}\n(Stable гілка)!",
+    )
+    title = localized_text(uid, "Что нового:", "What's new:", "Що нового:")
+    footer = localized_text(uid, "🎮 Ник бота", "🎮 Bot username", "🎮 Нік бота") + f" — @{INLINE_BOT_USERNAME}"
     items = WHATS_NEW_ITEMS.get(get_user_language(uid), WHATS_NEW_ITEMS["ru"])
-    return "\n".join([title, ""] + [f"• {item}" for item in items])
+    return "\n".join([header, "", title] + [f"• {item}" for item in items] + ["", footer])
 
 
 def _render_onboarding_text(uid):
