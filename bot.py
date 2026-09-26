@@ -185,6 +185,7 @@ TRANSLATIONS = {
         "support": "💬 Підтримка",
         "settings": "⚙️ Налаштування",
         "quests": "Квести",
+        "invite": "🤝 Запросити друга",
         "create_room": "🚪 Створити кімнату",
         "choose_language": "🌍 Оберіть мову:",
         "language_changed": "✅ Мову змінено!",
@@ -216,6 +217,7 @@ TRANSLATIONS = {
         "support": "💬 Поддержка",
         "settings": "⚙️ Настройки",
         "quests": "Квесты",
+        "invite": "🤝 Пригласить друга",
         "create_room": "🚪 Создать комнату",
         "choose_language": "🌍 Выберите язык:",
         "language_changed": "✅ Язык изменён!",
@@ -247,6 +249,7 @@ TRANSLATIONS = {
         "support": "💬 Support",
         "settings": "⚙️ Settings",
         "quests": "Quests",
+        "invite": "🤝 Invite a friend",
         "create_room": "🚪 Create Room",
         "choose_language": "🌍 Choose language:",
         "language_changed": "✅ Language changed!",
@@ -422,6 +425,7 @@ GAME_DESCRIPTIONS_LANG = {
 
 WHATS_NEW_ITEMS = {
     "ru": [
+        "Реферальная система: пригласите друга по ссылке из «🤝 Пригласить друга» — 100 🪙 за каждого активного друга и бонусы за 5, 10 и 20 друзей.",
         "Сапёр переделан: на кнопках видно цифры и мины, пустая область открывается целиком, появились флажки, а первый ход больше не подрывается.",
         "Крестики-нолики: выигрышная линия подсвечивается, видно чей ход по имени, реванш начинает тот, кто ходил вторым.",
         "Словесная дуэль заработала полностью — буквы, проверка слова, счёт и реванш.",
@@ -430,6 +434,7 @@ WHATS_NEW_ITEMS = {
         "Бот опенсорсный: github.com/RBXLU/minigamesbot",
     ],
     "en": [
+        "Referrals: invite friends with the link from «🤝 Invite a friend» — 100 🪙 per active friend plus bonuses at 5, 10 and 20 friends.",
         "Minesweeper reworked: buttons show numbers and mines, empty areas open at once, flags are in, and the first tap can no longer blow up.",
         "Tic-tac-toe: the winning line is highlighted, the turn line names the player, and the rematch starts with whoever went second.",
         "The word duel is fully playable now — letters, word checks, scoring and a rematch.",
@@ -438,6 +443,7 @@ WHATS_NEW_ITEMS = {
         "The bot is open-source: github.com/RBXLU/minigamesbot",
     ],
     "uk": [
+        "Реферальна система: запросіть друга за посиланням із «🤝 Запросити друга» — 100 🪙 за кожного активного друга та бонуси за 5, 10 і 20 друзів.",
         "Сапер перероблено: на кнопках видно цифри та міни, порожня область відкривається повністю, з'явилися прапорці, а перший хід більше не підривається.",
         "Хрестики-нулики: виграшна лінія підсвічується, видно чий хід за іменем, реванш починає той, хто ходив другим.",
         "Словесна дуель запрацювала повністю — літери, перевірка слова, рахунок і реванш.",
@@ -1485,6 +1491,10 @@ def _record_game_play(user_id, game_key, display_name=None, session_id=None):
     _update_matching_quests(user_id, "count_games_weekly", game_key=game_key)
     _update_matching_quests(user_id, "count_games_seasonal", game_key=game_key)
     _check_achievements(user_id, rec)
+    if rec.get("ref_status") == "waiting":
+        _referral_track_play(user_id)
+    if rec.get("ref_pending"):
+        _referral_flush(user_id)
 
 def _record_game_play_once(user_id, game_key, session_id, display_name=None):
     if not game_key:
@@ -1528,6 +1538,313 @@ def _record_game_result(user_id, game_key, result, extra=None):
         _update_matching_quests(user_id, "count_wins", game_key=game_key)
         _update_matching_quests(user_id, "win_specific_game", game_key=game_key)
     _check_achievements(user_id, rec)
+
+
+# ---------------------------------------------------------------------------
+# Реферальная система
+#
+# Друг засчитывается не за переход по ссылке, а за активность: иначе ссылку
+# накручивают пачкой свежих аккаунтов. Лимит в день ограничивает накрутку и
+# при выполненном условии активности; сверх лимита друзья ждут в очереди.
+# ---------------------------------------------------------------------------
+REFERRAL_REWARD = int(os.getenv("REFERRAL_REWARD", "100"))
+REFERRAL_WELCOME_BONUS = int(os.getenv("REFERRAL_WELCOME_BONUS", "50"))
+REFERRAL_MIN_GAMES = int(os.getenv("REFERRAL_MIN_GAMES", "3"))
+REFERRAL_MIN_DAYS = int(os.getenv("REFERRAL_MIN_DAYS", "2"))
+REFERRAL_DAILY_LIMIT = int(os.getenv("REFERRAL_DAILY_LIMIT", "10"))
+REFERRAL_MILESTONES = ((5, 500), (10, 1000), (20, 3000))
+REFERRAL_PREFIX = "ref_"
+_referral_lock = threading.RLock()
+
+
+def _referral_link(uid):
+    return f"https://t.me/{INLINE_BOT_USERNAME}?start={REFERRAL_PREFIX}{uid}"
+
+
+def _referral_parse_payload(text):
+    """`/start ref_123` → 123, иначе None."""
+    parts = str(text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    payload = parts[1].strip()
+    if not payload.startswith(REFERRAL_PREFIX):
+        return None
+    digits = payload[len(REFERRAL_PREFIX):]
+    return int(digits) if digits.isdigit() else None
+
+
+def _referral_is_new_user(uid):
+    return str(uid) not in load_data().get("users", {})
+
+
+def _referral_next_milestone(credited):
+    for need, bonus in REFERRAL_MILESTONES:
+        if credited < need:
+            return need, bonus
+    return None
+
+
+def _referral_register(new_uid, referrer_uid, new_name):
+    """Привязывает нового пользователя к пригласившему. Возвращает True при успехе."""
+    if not referrer_uid or int(referrer_uid) == int(new_uid):
+        return False
+    with _referral_lock:
+        d = load_data()
+        users = d.setdefault("users", {})
+        ref_rec = users.get(str(referrer_uid))
+        if not isinstance(ref_rec, dict) or ref_rec.get("is_banned"):
+            return False
+        rec = _ensure_profile_fields(users.setdefault(str(new_uid), {}))
+        if rec.get("ref_by"):
+            return False
+        today = date.today().isoformat()
+        rec["ref_by"] = str(referrer_uid)
+        rec["ref_joined"] = today
+        rec["ref_play_days"] = []
+        rec["ref_status"] = "waiting"
+        rec["coins"] = int(rec.get("coins", 0) or 0) + REFERRAL_WELCOME_BONUS
+        users[str(new_uid)] = rec
+
+        invited = ref_rec.get("ref_invited")
+        if not isinstance(invited, list):
+            invited = []
+        if str(new_uid) not in invited:
+            invited.append(str(new_uid))
+        ref_rec["ref_invited"] = invited[-5000:]
+        save_data(d)
+
+    _referral_notify(
+        referrer_uid,
+        localized_text(
+            referrer_uid,
+            f"🤝 По вашей ссылке пришёл новый игрок: {new_name}.\n"
+            f"Вы получите {REFERRAL_REWARD} 🪙, когда друг сыграет {REFERRAL_MIN_GAMES} партии "
+            f"минимум в {REFERRAL_MIN_DAYS} разных дня.",
+            f"🤝 A new player joined via your link: {new_name}.\n"
+            f"You'll get {REFERRAL_REWARD} 🪙 once they play {REFERRAL_MIN_GAMES} games "
+            f"on at least {REFERRAL_MIN_DAYS} different days.",
+            f"🤝 За вашим посиланням прийшов новий гравець: {new_name}.\n"
+            f"Ви отримаєте {REFERRAL_REWARD} 🪙, коли друг зіграє {REFERRAL_MIN_GAMES} партії "
+            f"щонайменше в {REFERRAL_MIN_DAYS} різні дні.",
+        ),
+    )
+    return True
+
+
+def _referral_track_play(uid):
+    """Отмечает день игры приглашённого и переводит его в очередь на награду."""
+    referrer = None
+    with _referral_lock:
+        d = load_data()
+        rec = d.get("users", {}).get(str(uid))
+        if not isinstance(rec, dict) or rec.get("ref_status") != "waiting":
+            return
+        days = rec.get("ref_play_days")
+        if not isinstance(days, list):
+            days = []
+        today = date.today().isoformat()
+        if today not in days:
+            days.append(today)
+        rec["ref_play_days"] = days[-14:]
+
+        games = int(rec.get("games_total", 0) or 0)
+        if games >= REFERRAL_MIN_GAMES and len(set(days)) >= REFERRAL_MIN_DAYS:
+            referrer = rec.get("ref_by")
+            ref_rec = d.get("users", {}).get(str(referrer))
+            if isinstance(ref_rec, dict):
+                rec["ref_status"] = "pending"
+                pending = ref_rec.get("ref_pending")
+                if not isinstance(pending, list):
+                    pending = []
+                if str(uid) not in pending:
+                    pending.append(str(uid))
+                ref_rec["ref_pending"] = pending
+            else:
+                # Пригласивший пропал из базы — засчитывать некому.
+                rec["ref_status"] = "orphaned"
+                referrer = None
+        save_data(d)
+    if referrer:
+        _referral_flush(referrer)
+
+
+def _referral_flush(referrer_uid):
+    """Начисляет награды за друзей в очереди в пределах дневного лимита."""
+    events = []
+    with _referral_lock:
+        d = load_data()
+        users = d.get("users", {})
+        rec = users.get(str(referrer_uid))
+        if not isinstance(rec, dict):
+            return []
+        pending = rec.get("ref_pending")
+        if not isinstance(pending, list) or not pending:
+            return []
+
+        today = date.today().isoformat()
+        if rec.get("ref_credit_day") != today:
+            rec["ref_credit_day"] = today
+            rec["ref_credit_today"] = 0
+        reached = rec.get("ref_milestones")
+        if not isinstance(reached, list):
+            reached = []
+
+        while pending and int(rec.get("ref_credit_today", 0)) < REFERRAL_DAILY_LIMIT:
+            friend = pending.pop(0)
+            friend_rec = users.get(friend)
+            if isinstance(friend_rec, dict):
+                if friend_rec.get("ref_status") == "credited":
+                    continue
+                friend_rec["ref_status"] = "credited"
+            credited = int(rec.get("ref_credited", 0) or 0) + 1
+            rec["ref_credited"] = credited
+            rec["ref_credit_today"] = int(rec.get("ref_credit_today", 0)) + 1
+            gain = REFERRAL_REWARD
+            bonus = 0
+            for need, amount in REFERRAL_MILESTONES:
+                if credited >= need and need not in reached:
+                    reached.append(need)
+                    bonus += amount
+            rec["coins"] = int(rec.get("coins", 0) or 0) + gain + bonus
+            rec["ref_earned"] = int(rec.get("ref_earned", 0) or 0) + gain + bonus
+            name = (friend_rec or {}).get("display_name") or friend
+            events.append((name, gain, bonus, credited))
+
+        rec["ref_pending"] = pending
+        rec["ref_milestones"] = reached
+        if events:
+            save_data(d)
+        queued = len(pending)
+
+    for name, gain, bonus, credited in events:
+        text = localized_text(
+            referrer_uid,
+            f"🎉 Друг {name} засчитан! +{gain} 🪙",
+            f"🎉 Your friend {name} counts! +{gain} 🪙",
+            f"🎉 Друга {name} зараховано! +{gain} 🪙",
+        )
+        if bonus:
+            text += localized_text(
+                referrer_uid,
+                f"\n🏆 Бонус за {credited} друзей: +{bonus} 🪙",
+                f"\n🏆 Bonus for {credited} friends: +{bonus} 🪙",
+                f"\n🏆 Бонус за {credited} друзів: +{bonus} 🪙",
+            )
+        _referral_notify(referrer_uid, text)
+    if events and queued:
+        _referral_notify(
+            referrer_uid,
+            localized_text(
+                referrer_uid,
+                f"⏳ Дневной лимит достигнут. Ещё {queued} в очереди — засчитаем завтра.",
+                f"⏳ Daily limit reached. {queued} more queued — they'll count tomorrow.",
+                f"⏳ Денний ліміт досягнуто. Ще {queued} у черзі — зарахуємо завтра.",
+            ),
+        )
+    return events
+
+
+def _referral_notify(uid, text):
+    try:
+        bot.send_message(uid, text)
+    except Exception:
+        # Пользователь мог заблокировать бота — награда всё равно начислена.
+        pass
+
+
+def _referral_stats(uid):
+    rec = load_data().get("users", {}).get(str(uid), {}) or {}
+    invited = rec.get("ref_invited") if isinstance(rec.get("ref_invited"), list) else []
+    pending = rec.get("ref_pending") if isinstance(rec.get("ref_pending"), list) else []
+    credited = int(rec.get("ref_credited", 0) or 0)
+    return {
+        "invited": len(invited),
+        "credited": credited,
+        "queued": len(pending),
+        "waiting": max(0, len(invited) - credited - len(pending)),
+        "earned": int(rec.get("ref_earned", 0) or 0),
+    }
+
+
+def _referral_text(uid):
+    s = _referral_stats(uid)
+    link = _referral_link(uid)
+    milestones = ", ".join(f"{need} — +{bonus}" for need, bonus in REFERRAL_MILESTONES)
+    nxt = _referral_next_milestone(s["credited"])
+    lines = [
+        localized_text(uid, "🤝 <b>Пригласить друга</b>", "🤝 <b>Invite a friend</b>", "🤝 <b>Запросити друга</b>"),
+        "",
+        localized_text(uid, "Ваша ссылка:", "Your link:", "Ваше посилання:"),
+        f"<code>{html.escape(link)}</code>",
+        "",
+        localized_text(
+            uid,
+            f"• Друг впервые открывает бота по ссылке — получает {REFERRAL_WELCOME_BONUS} 🪙\n"
+            f"• Когда друг сыграет {REFERRAL_MIN_GAMES} партии в {REFERRAL_MIN_DAYS} разных дня, вы получаете {REFERRAL_REWARD} 🪙\n"
+            f"• Бонусы за друзей: {milestones} 🪙\n"
+            f"• В день засчитывается до {REFERRAL_DAILY_LIMIT} друзей, остальные — на следующий день",
+            f"• Your friend opens the bot via the link for the first time — gets {REFERRAL_WELCOME_BONUS} 🪙\n"
+            f"• Once they play {REFERRAL_MIN_GAMES} games on {REFERRAL_MIN_DAYS} different days, you get {REFERRAL_REWARD} 🪙\n"
+            f"• Friend milestones: {milestones} 🪙\n"
+            f"• Up to {REFERRAL_DAILY_LIMIT} friends count per day, the rest carry over",
+            f"• Друг уперше відкриває бота за посиланням — отримує {REFERRAL_WELCOME_BONUS} 🪙\n"
+            f"• Коли друг зіграє {REFERRAL_MIN_GAMES} партії в {REFERRAL_MIN_DAYS} різні дні, ви отримуєте {REFERRAL_REWARD} 🪙\n"
+            f"• Бонуси за друзів: {milestones} 🪙\n"
+            f"• На день зараховується до {REFERRAL_DAILY_LIMIT} друзів, решта — наступного дня",
+        ),
+        "",
+        localized_text(
+            uid,
+            f"Приглашено: {s['invited']} · засчитано: {s['credited']} · ждут активности: {s['waiting']}",
+            f"Invited: {s['invited']} · counted: {s['credited']} · awaiting activity: {s['waiting']}",
+            f"Запрошено: {s['invited']} · зараховано: {s['credited']} · чекають активності: {s['waiting']}",
+        ),
+    ]
+    if s["queued"]:
+        lines.append(localized_text(
+            uid,
+            f"В очереди (лимит дня): {s['queued']}",
+            f"Queued (daily limit): {s['queued']}",
+            f"У черзі (ліміт дня): {s['queued']}",
+        ))
+    if nxt:
+        need, bonus = nxt
+        lines.append(localized_text(
+            uid,
+            f"До бонуса +{bonus} 🪙: ещё {need - s['credited']}",
+            f"Next bonus +{bonus} 🪙: {need - s['credited']} to go",
+            f"До бонусу +{bonus} 🪙: ще {need - s['credited']}",
+        ))
+    lines.append(localized_text(
+        uid,
+        f"Заработано: {s['earned']} 🪙",
+        f"Earned: {s['earned']} 🪙",
+        f"Зароблено: {s['earned']} 🪙",
+    ))
+    return "\n".join(lines)
+
+
+def _referral_kb(uid):
+    from urllib.parse import quote
+    share_text = localized_text(
+        uid,
+        "Залетай в мини-игры в Telegram — по моей ссылке дадут бонус 🪙",
+        "Join me for mini-games in Telegram — my link gives you a coin bonus 🪙",
+        "Залітай у міні-ігри в Telegram — за моїм посиланням дадуть бонус 🪙",
+    )
+    url = f"https://t.me/share/url?url={quote(_referral_link(uid), safe='')}&text={quote(share_text, safe='')}"
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(
+        localized_text(uid, "📤 Поделиться ссылкой", "📤 Share link", "📤 Поділитися посиланням"), url=url))
+    kb.add(types.InlineKeyboardButton(
+        localized_text(uid, "🔄 Обновить", "🔄 Refresh", "🔄 Оновити"), callback_data="ref_refresh"))
+    return kb
+
+
+def show_referral(chat_id, uid):
+    _referral_flush(uid)
+    bot.send_message(chat_id, _referral_text(uid), parse_mode="HTML",
+                     reply_markup=_referral_kb(uid), disable_web_page_preview=True)
 
 
 def _record_game_result_once(user_id, game_key, result, session_id, extra=None):
@@ -4399,9 +4716,44 @@ def _send_home_menu(message):
 
 @bot.message_handler(commands=["start"])
 def start(message):
-    if not _guard_user(message.from_user.id, chat_id=message.chat.id, action="start", require_subscription=False):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="start", require_subscription=False):
         return
+    # Проверяем до _send_home_menu: он создаёт запись пользователя.
+    referrer = _referral_parse_payload(message.text)
+    is_new = referrer is not None and message.chat.type == "private" and _referral_is_new_user(uid)
     _send_home_menu(message)
+    if is_new:
+        name = message.from_user.first_name or message.from_user.username or str(uid)
+        if _referral_register(uid, referrer, name):
+            bot.send_message(message.chat.id, localized_text(
+                uid,
+                f"🎁 Вы пришли по приглашению — держите {REFERRAL_WELCOME_BONUS} 🪙!",
+                f"🎁 You came via an invite — here are {REFERRAL_WELCOME_BONUS} 🪙!",
+                f"🎁 Ви прийшли за запрошенням — тримайте {REFERRAL_WELCOME_BONUS} 🪙!",
+            ))
+    else:
+        _referral_flush(uid)
+
+
+@bot.message_handler(commands=["ref", "invite"])
+def referral_cmd(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="ref"):
+        return
+    show_referral(message.chat.id, uid)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "ref_refresh")
+def referral_refresh(call):
+    uid = call.from_user.id
+    try:
+        _referral_flush(uid)
+        safe_edit_message(call, _referral_text(uid), reply_markup=_referral_kb(uid), parse_mode="HTML")
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("referral_refresh", e, user_id=uid)
+        bot.answer_callback_query(call.id, "Ошибка")
 
 @bot.message_handler(commands=["topusers"])
 def topusers_cmd(message):
@@ -10535,7 +10887,10 @@ def show_main_menu(chat_id, uid):
         types.KeyboardButton(t(uid, "leaderboard"))
     )
     
-    kb.add(types.KeyboardButton(t(uid, "quests")))
+    kb.add(
+        types.KeyboardButton(t(uid, "quests")),
+        types.KeyboardButton(t(uid, "invite"))
+    )
     
     kb.add(types.KeyboardButton(t(uid, "create_room")))
 
@@ -10588,7 +10943,7 @@ def set_language_callback(call):
 
 @bot.message_handler(func=lambda m: any(text_matches_key(m.text, key) for key in (
     "games", "profile", "ai", "shop", "achievements",
-    "leaderboard", "support", "settings", "create_room", "quests"
+    "leaderboard", "support", "settings", "create_room", "quests", "invite"
 )))
 def handle_menu_buttons(message):
     uid = message.from_user.id
@@ -10616,6 +10971,9 @@ def handle_menu_buttons(message):
     
     elif text_matches_key(text, "quests"):
         quests_cmd(message)
+
+    elif text_matches_key(text, "invite"):
+        show_referral(message.chat.id, uid)
     
     elif text_matches_key(text, "support"):
         show_support_menu(message, uid)
