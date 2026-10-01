@@ -376,6 +376,135 @@ def _upsert_user_profile(conn, user_id, user_data, now):
     )
 
 
+def _write_user(conn, user_id, user_data, data_json, now):
+    conn.execute(
+        """
+        INSERT INTO users(user_id, data_json, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            data_json = excluded.data_json,
+            updated_at = excluded.updated_at
+        """,
+        (user_id, data_json, now),
+    )
+    _upsert_user_profile(conn, user_id, user_data, now)
+
+    if isinstance(user_data, dict):
+        conn.execute("DELETE FROM games_history WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM quests_progress WHERE user_id = ?", (user_id,))
+        _migrate_user_side_tables(conn, user_id, user_data)
+
+
+# Точечный доступ к одному пользователю. load_state/save_state разбирают и
+# сравнивают всю базу, а горячим обработчикам нужна одна запись: на каждое
+# нажатие кнопки разбор всей базы стоил времени и памяти пропорционально числу
+# пользователей.
+
+def load_user(user_id, db_path=DEFAULT_DB_PATH):
+    """Возвращает (запись, исходный JSON); для нового пользователя — ({}, None)."""
+    return _with_retries(lambda: _load_user_once(user_id, db_path), "load_user")
+
+
+def _load_user_once(user_id, db_path):
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            _ensure_schema(conn, db_path)
+            row = conn.execute(
+                "SELECT data_json FROM users WHERE user_id = ?", (int(user_id),)
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        return {}, None
+    try:
+        data = json.loads(row["data_json"])
+    except Exception:
+        data = {}
+    return (data if isinstance(data, dict) else {}), row["data_json"]
+
+
+def user_exists(user_id, db_path=DEFAULT_DB_PATH):
+    def op():
+        with _DB_LOCK:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn, db_path)
+                return conn.execute(
+                    "SELECT 1 FROM users WHERE user_id = ?", (int(user_id),)
+                ).fetchone() is not None
+            finally:
+                conn.close()
+    return _with_retries(op, "user_exists")
+
+
+def save_user(user_id, user_data, previous_json=None, db_path=DEFAULT_DB_PATH):
+    """Пишет одну запись; если она не изменилась с загрузки, ничего не делает."""
+    data = user_data if isinstance(user_data, dict) else {}
+    data_json = json.dumps(data, ensure_ascii=False)
+    if previous_json is not None and previous_json == data_json:
+        return False
+
+    def op():
+        with _DB_LOCK:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn, db_path)
+                conn.execute("BEGIN IMMEDIATE")
+                _write_user(conn, int(user_id), data, data_json, _utcnow())
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        return True
+    return _with_retries(op, "save_user")
+
+
+def update_state_key(key, mutate, default=None, db_path=DEFAULT_DB_PATH):
+    """Читает одно значение из таблицы state, применяет mutate и записывает обратно."""
+    if key not in STATE_TABLE_KEYS:
+        raise ValueError(f"unknown state key: {key}")
+
+    def op():
+        with _DB_LOCK:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn, db_path)
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT value_json FROM state WHERE key = ?", (key,)).fetchone()
+                try:
+                    value = json.loads(row["value_json"]) if row else default
+                except Exception:
+                    value = default
+                value = mutate(value)
+                conn.execute(
+                    """
+                    INSERT INTO state(key, value_json, updated_at) VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+                    """,
+                    (key, json.dumps(value, ensure_ascii=False), _utcnow()),
+                )
+                conn.commit()
+                return value
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+    return _with_retries(op, "update_state_key")
+
+
+class _LoadedState(dict):
+    """Состояние из load_state; помнит JSON пользователей на момент загрузки.
+
+    save_state сравнивает с ним, а не с текущей базой: иначе устаревшая полная
+    копия затирала бы игроков, которых за это время обновили точечно.
+    """
+
+    __slots__ = ("loaded_users",)
+
+
 def load_state(db_path=DEFAULT_DB_PATH):
     return _with_retries(lambda: _load_state_once(db_path), "load_state")
 
@@ -385,8 +514,10 @@ def _load_state_once(db_path):
         conn = _connect(db_path)
         try:
             _ensure_schema(conn, db_path)
-            state = {"users": {}}
+            state = _LoadedState(users={})
+            state.loaded_users = {}
             for row in conn.execute("SELECT user_id, data_json FROM users"):
+                state.loaded_users[row["user_id"]] = row["data_json"]
                 try:
                     state["users"][str(row["user_id"])] = json.loads(row["data_json"])
                 except Exception:
@@ -422,10 +553,23 @@ def _save_state_once(data, db_path):
 
             # Вызывающий код передаёт всё состояние целиком, хотя меняется обычно
             # один пользователь: сравниваем с сохранённым и пишем только отличия.
-            existing_users = {
-                row["user_id"]: row["data_json"]
-                for row in conn.execute("SELECT user_id, data_json FROM users")
-            }
+            if isinstance(payload, _LoadedState):
+                existing_users = dict(payload.loaded_users)
+                fresh = [
+                    int(uid) for uid in users
+                    if str(uid).isdigit() and int(uid) not in existing_users
+                ]
+                for uid in fresh:
+                    row = conn.execute(
+                        "SELECT data_json FROM users WHERE user_id = ?", (uid,)
+                    ).fetchone()
+                    if row is not None:
+                        existing_users[uid] = row["data_json"]
+            else:
+                existing_users = {
+                    row["user_id"]: row["data_json"]
+                    for row in conn.execute("SELECT user_id, data_json FROM users")
+                }
             existing_state = {
                 row["key"]: row["value_json"]
                 for row in conn.execute("SELECT key, value_json FROM state")
@@ -443,21 +587,7 @@ def _save_state_once(data, db_path):
                 if existing_users.get(numeric_user_id) == data_json:
                     # Unchanged user: skip the main row, profile and side tables.
                     continue
-                conn.execute(
-                    """
-                    INSERT INTO users(user_id, data_json, updated_at) VALUES (?, ?, ?)
-                    ON CONFLICT(user_id) DO UPDATE SET
-                        data_json = excluded.data_json,
-                        updated_at = excluded.updated_at
-                    """,
-                    (numeric_user_id, data_json, now),
-                )
-                _upsert_user_profile(conn, numeric_user_id, user_data, now)
-
-                if isinstance(user_data, dict):
-                    conn.execute("DELETE FROM games_history WHERE user_id = ?", (numeric_user_id,))
-                    conn.execute("DELETE FROM quests_progress WHERE user_id = ?", (numeric_user_id,))
-                    _migrate_user_side_tables(conn, numeric_user_id, user_data)
+                _write_user(conn, numeric_user_id, user_data, data_json, now)
 
             for key in STATE_TABLE_KEYS:
                 value = payload.get(key)
@@ -524,14 +654,11 @@ def export_state_to_json(json_path, db_path=DEFAULT_DB_PATH):
 
 
 def get_user_record(user_id, db_path=DEFAULT_DB_PATH):
-    state = load_state(db_path=db_path)
-    return state.setdefault("users", {}).setdefault(str(user_id), {})
+    return load_user(user_id, db_path=db_path)[0]
 
 
 def save_user_record(user_id, user_data, db_path=DEFAULT_DB_PATH):
-    state = load_state(db_path=db_path)
-    state.setdefault("users", {})[str(user_id)] = user_data if isinstance(user_data, dict) else {}
-    save_state(state, db_path=db_path)
+    save_user(user_id, user_data, db_path=db_path)
 
 
 def log_admin_action(admin_id, action, target_user_id=None, details=None, db_path=DEFAULT_DB_PATH):

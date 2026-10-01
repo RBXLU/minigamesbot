@@ -10,6 +10,7 @@ import traceback
 import sys
 from itertools import combinations
 from collections import OrderedDict
+from contextlib import contextmanager
 from threading import Thread
 import html
 import json
@@ -21,7 +22,6 @@ import tarfile
 import uuid
 import shutil
 from pathlib import Path
-from openai import OpenAI
 from dotenv import load_dotenv
 from bussines_bot import register_business_handlers
 from core.db import (
@@ -31,8 +31,12 @@ from core.db import (
     export_state_to_json,
     initialize_storage,
     load_state,
+    load_user,
     log_admin_action,
     save_state as save_state_to_db,
+    save_user,
+    update_state_key,
+    user_exists,
 )
 from room_games import (
     ROOM_VOTE_GAMES,
@@ -473,16 +477,15 @@ def get_user_language(user_id):
         if cached and now - cached[1] < LANG_CACHE_TTL:
             return cached[0]
 
-    lang = load_data().get("users", {}).get(key, {}).get("language", "ru")
+    lang = load_user_record(key).get("language", "ru")
     with _lang_cache_lock:
         _lang_cache[key] = (lang, now)
     return lang
 
 
 def set_user_language(user_id, lang):
-    data = load_data()
-    data.setdefault("users", {}).setdefault(str(user_id), {})["language"] = lang
-    save_data(data)
+    with user_record(user_id) as rec:
+        rec["language"] = lang
     with _lang_cache_lock:
         _lang_cache[str(user_id)] = (lang, time.monotonic())
 
@@ -961,11 +964,21 @@ NVMAPI_KEY = os.getenv("NVMAPI_KEY", "").strip()
 NVMAPI_BASE_URL = os.getenv("NVMAPI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
 NVMAPI_MODEL = os.getenv("NVMAPI_MODEL", "meta/llama-3.1-8b-instruct").strip()
 NVMAPI_TIMEOUT = float(os.getenv("NVMAPI_TIMEOUT", "30"))
-nvmapi_client = (
-    OpenAI(api_key=NVMAPI_KEY, base_url=NVMAPI_BASE_URL, timeout=NVMAPI_TIMEOUT)
-    if NVMAPI_KEY
-    else None
-)
+_nvmapi_client = None
+_nvmapi_client_lock = threading.Lock()
+
+
+def get_nvmapi_client():
+    """Клиент создаётся при первом AI-запросе: пакет openai занимает ~30 МБ памяти,
+    а на тарифе с 256 МБ держать его с самого старта ради редких запросов дорого."""
+    global _nvmapi_client
+    if not NVMAPI_KEY:
+        return None
+    with _nvmapi_client_lock:
+        if _nvmapi_client is None:
+            from openai import OpenAI
+            _nvmapi_client = OpenAI(api_key=NVMAPI_KEY, base_url=NVMAPI_BASE_URL, timeout=NVMAPI_TIMEOUT)
+    return _nvmapi_client
 
 FREE_DAILY_QUOTA = int(os.getenv("FREE_DAILY_QUOTA", 10))
 
@@ -1128,8 +1141,37 @@ def save_data(data):
     save_state_to_db(data, DB_FILE)
 
 
+# Горячие обработчики (партия, квесты, достижения, бан, язык) трогают одного
+# игрока. Раньше каждый из них разбирал всю базу через load_data/save_data:
+# одна партия делала 22 полных чтения и 4 полных записи, и память с временем
+# ответа росли вместе с числом пользователей.
+_USER_RECORD_LOCK = threading.RLock()
+
+
+def load_user_record(user_id):
+    """Запись одного пользователя только для чтения; новый пользователь — {}."""
+    return load_user(user_id, db_path=DB_FILE)[0]
+
+
+@contextmanager
+def user_record(user_id):
+    """Чтение-изменение-запись одного пользователя; неизменённая запись не пишется."""
+    with _USER_RECORD_LOCK:
+        rec, raw = load_user(user_id, db_path=DB_FILE)
+        yield rec
+        save_user(user_id, rec, previous_json=raw, db_path=DB_FILE)
+
+
+def _bump_global_game_stat(game_key):
+    def bump(stats):
+        stats = stats if isinstance(stats, dict) else {}
+        stats[game_key] = int(stats.get(game_key, 0) or 0) + 1
+        return stats
+    update_state_key("global_game_stats", bump, default={}, db_path=DB_FILE)
+
+
 def _is_user_banned(user_id):
-    rec = load_data().get("users", {}).get(str(user_id), {})
+    rec = load_user_record(user_id)
     return bool(rec.get("is_banned")), str(rec.get("ban_reason") or "без причины")
 
 
@@ -1292,28 +1334,23 @@ except Exception:
 start_backup_scheduler()
 
 def update_user_streak(user_id, display_name=None):
-    d = load_data()
-    users = d.setdefault("users", {})
-    rec = users.setdefault(str(user_id), {})
-
     today = date.today().isoformat()
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    last_day = rec.get("streak_last_day")
-    cur = int(rec.get("streak_current", 0) or 0)
+    with user_record(user_id) as rec:
+        last_day = rec.get("streak_last_day")
+        cur = int(rec.get("streak_current", 0) or 0)
 
-    if last_day == yesterday:
-        cur = cur + 1 if cur > 0 else 1
-    elif last_day != today:
-        cur = 1
+        if last_day == yesterday:
+            cur = cur + 1 if cur > 0 else 1
+        elif last_day != today:
+            cur = 1
 
-    rec["streak_current"] = cur
-    rec["streak_last_day"] = today
-    rec["streak_best"] = max(int(rec.get("streak_best", 0) or 0), cur)
-    if display_name:
-        rec["display_name"] = str(display_name)[:64]
-    users[str(user_id)] = rec
-    save_data(d)
-    _check_achievements(user_id, rec)
+        rec["streak_current"] = cur
+        rec["streak_last_day"] = today
+        rec["streak_best"] = max(int(rec.get("streak_best", 0) or 0), cur)
+        if display_name:
+            rec["display_name"] = str(display_name)[:64]
+    _check_achievements(user_id)
     return cur
 
 def get_user(uid):
@@ -1418,9 +1455,15 @@ def _update_matching_quests(user_id, event_type, game_key=None, amount=1):
 
 
 def _check_achievements(uid, rec=None):
-    d = load_data()
-    users = d.setdefault("users", {})
-    rec = _ensure_profile_fields(rec or users.setdefault(str(uid), {}))
+    # rec оставлен ради совместимости вызовов: запись всегда читается заново,
+    # переданная копия могла устареть.
+    with user_record(uid) as rec:
+        _check_achievements_in(rec)
+    return rec
+
+
+def _check_achievements_in(rec):
+    _ensure_profile_fields(rec)
     achievements = rec.setdefault("achievements", {})
 
     total_games = int(rec.get("games_total", 0) or 0)
@@ -1446,56 +1489,46 @@ def _check_achievements(uid, rec=None):
         "hidden_night": current_hour < 5 and total_games >= 1,
     }
 
-    changed = False
     for key, ok in checks.items():
         if ok and key not in achievements:
             achievements[key] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            changed = True
+    rec["achievements"] = achievements
 
-    if changed:
-        rec["achievements"] = achievements
-        users[str(uid)] = rec
-        save_data(d)
-    return rec
 
 def _record_game_play(user_id, game_key, display_name=None, session_id=None):
     if not game_key:
         return
-    d = load_data()
-    users = d.setdefault("users", {})
-    rec = users.setdefault(str(user_id), {})
-    rec = _ensure_profile_fields(rec)
-    if display_name:
-        rec["display_name"] = str(display_name)[:64]
-    rec["last_game"] = game_key
-    rec["last_game_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with user_record(user_id) as rec:
+        _ensure_profile_fields(rec)
+        if display_name:
+            rec["display_name"] = str(display_name)[:64]
+        rec["last_game"] = game_key
+        rec["last_game_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    gstats = rec["game_stats"] = _game_stats(rec)
-    row = gstats.setdefault(game_key, {"played": 0, "wins": 0, "losses": 0, "draws": 0})
-    row["played"] = int(row.get("played", 0) or 0) + 1
+        gstats = rec["game_stats"] = _game_stats(rec)
+        row = gstats.setdefault(game_key, {"played": 0, "wins": 0, "losses": 0, "draws": 0})
+        row["played"] = int(row.get("played", 0) or 0) + 1
 
-    rec["games_total"] = int(rec.get("games_total", 0) or 0) + 1
-    history = rec.get("match_history")
-    if not isinstance(history, list):
-        history = []
-    history.append({
-        "game": game_key,
-        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "session": str(session_id or ""),
-    })
-    rec["match_history"] = history[-50:]
-    rec["coins"] = int(rec.get("coins", 0) or 0) + 2
+        rec["games_total"] = int(rec.get("games_total", 0) or 0) + 1
+        history = rec.get("match_history")
+        if not isinstance(history, list):
+            history = []
+        history.append({
+            "game": game_key,
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "session": str(session_id or ""),
+        })
+        rec["match_history"] = history[-50:]
+        rec["coins"] = int(rec.get("coins", 0) or 0) + 2
 
-    global_stats = d.setdefault("global_game_stats", {})
-    global_stats[game_key] = int(global_stats.get(game_key, 0) or 0) + 1
-    save_data(d)
+    _bump_global_game_stat(game_key)
     _update_matching_quests(user_id, "play_specific_game", game_key=game_key)
     if str(game_key).startswith("room_"):
         _update_matching_quests(user_id, "play_room_game", game_key=game_key)
     _update_matching_quests(user_id, "count_games", game_key=game_key)
     _update_matching_quests(user_id, "count_games_weekly", game_key=game_key)
     _update_matching_quests(user_id, "count_games_seasonal", game_key=game_key)
-    _check_achievements(user_id, rec)
+    _check_achievements(user_id)
     if rec.get("ref_status") == "waiting":
         _referral_track_play(user_id)
     if rec.get("ref_pending"):
@@ -1508,41 +1541,35 @@ def _record_game_play_once(user_id, game_key, session_id, display_name=None):
     if not sid:
         _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id)
         return
-    d = load_data()
-    users = d.setdefault("users", {})
-    rec = users.setdefault(str(user_id), {})
-    seen = rec.get("tracked_sessions")
-    if not isinstance(seen, list):
-        seen = []
     uniq = f"{game_key}:{sid}"
-    if uniq in seen:
+    with user_record(user_id) as rec:
+        seen = rec.get("tracked_sessions")
+        if not isinstance(seen, list):
+            seen = []
+        duplicate = uniq in seen
+        if not duplicate:
+            seen.append(uniq)
+            rec["tracked_sessions"] = seen[-1000:]
+    if duplicate:
         return
-    seen.append(uniq)
-    rec["tracked_sessions"] = seen[-1000:]
-    users[str(user_id)] = rec
-    save_data(d)
     _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id)
 
 def _record_game_result(user_id, game_key, result, extra=None):
     if result not in ("wins", "losses", "draws"):
         return
-    d = load_data()
-    users = d.setdefault("users", {})
-    rec = users.setdefault(str(user_id), {})
-    rec = _ensure_profile_fields(rec)
-    gstats = rec["game_stats"] = _game_stats(rec)
-    row = gstats.setdefault(game_key, {"played": 0, "wins": 0, "losses": 0, "draws": 0})
-    row[result] = int(row.get(result, 0) or 0) + 1
-    replay = {"game": game_key, "result": result, "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    if extra and isinstance(extra, dict):
-        replay.update(extra)
-    rec["last_replay"] = replay
-    users[str(user_id)] = rec
-    save_data(d)
+    with user_record(user_id) as rec:
+        _ensure_profile_fields(rec)
+        gstats = rec["game_stats"] = _game_stats(rec)
+        row = gstats.setdefault(game_key, {"played": 0, "wins": 0, "losses": 0, "draws": 0})
+        row[result] = int(row.get(result, 0) or 0) + 1
+        replay = {"game": game_key, "result": result, "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        if extra and isinstance(extra, dict):
+            replay.update(extra)
+        rec["last_replay"] = replay
     if result == "wins":
         _update_matching_quests(user_id, "count_wins", game_key=game_key)
         _update_matching_quests(user_id, "win_specific_game", game_key=game_key)
-    _check_achievements(user_id, rec)
+    _check_achievements(user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1559,7 +1586,6 @@ REFERRAL_MIN_DAYS = int(os.getenv("REFERRAL_MIN_DAYS", "2"))
 REFERRAL_DAILY_LIMIT = int(os.getenv("REFERRAL_DAILY_LIMIT", "10"))
 REFERRAL_MILESTONES = ((5, 500), (10, 1000), (20, 3000))
 REFERRAL_PREFIX = "ref_"
-_referral_lock = threading.RLock()
 
 
 def _referral_link(uid):
@@ -1579,7 +1605,7 @@ def _referral_parse_payload(text):
 
 
 def _referral_is_new_user(uid):
-    return str(uid) not in load_data().get("users", {})
+    return not user_exists(uid, db_path=DB_FILE)
 
 
 def _referral_next_milestone(credited):
@@ -1593,30 +1619,29 @@ def _referral_register(new_uid, referrer_uid, new_name):
     """Привязывает нового пользователя к пригласившему. Возвращает True при успехе."""
     if not referrer_uid or int(referrer_uid) == int(new_uid):
         return False
-    with _referral_lock:
-        d = load_data()
-        users = d.setdefault("users", {})
-        ref_rec = users.get(str(referrer_uid))
-        if not isinstance(ref_rec, dict) or ref_rec.get("is_banned"):
+    with _USER_RECORD_LOCK:
+        # user_record создал бы пустую запись, поэтому существование проверяем отдельно.
+        if not user_exists(referrer_uid, db_path=DB_FILE):
             return False
-        rec = _ensure_profile_fields(users.setdefault(str(new_uid), {}))
-        if rec.get("ref_by"):
-            return False
-        today = date.today().isoformat()
-        rec["ref_by"] = str(referrer_uid)
-        rec["ref_joined"] = today
-        rec["ref_play_days"] = []
-        rec["ref_status"] = "waiting"
-        rec["coins"] = int(rec.get("coins", 0) or 0) + REFERRAL_WELCOME_BONUS
-        users[str(new_uid)] = rec
+        with user_record(referrer_uid) as ref_rec:
+            if ref_rec.get("is_banned"):
+                return False
+            with user_record(new_uid) as rec:
+                _ensure_profile_fields(rec)
+                if rec.get("ref_by"):
+                    return False
+                rec["ref_by"] = str(referrer_uid)
+                rec["ref_joined"] = date.today().isoformat()
+                rec["ref_play_days"] = []
+                rec["ref_status"] = "waiting"
+                rec["coins"] = int(rec.get("coins", 0) or 0) + REFERRAL_WELCOME_BONUS
 
-        invited = ref_rec.get("ref_invited")
-        if not isinstance(invited, list):
-            invited = []
-        if str(new_uid) not in invited:
-            invited.append(str(new_uid))
-        ref_rec["ref_invited"] = invited[-5000:]
-        save_data(d)
+            invited = ref_rec.get("ref_invited")
+            if not isinstance(invited, list):
+                invited = []
+            if str(new_uid) not in invited:
+                invited.append(str(new_uid))
+            ref_rec["ref_invited"] = invited[-5000:]
 
     _referral_notify(
         referrer_uid,
@@ -1639,36 +1664,34 @@ def _referral_register(new_uid, referrer_uid, new_name):
 def _referral_track_play(uid):
     """Отмечает день игры приглашённого и переводит его в очередь на награду."""
     referrer = None
-    with _referral_lock:
-        d = load_data()
-        rec = d.get("users", {}).get(str(uid))
-        if not isinstance(rec, dict) or rec.get("ref_status") != "waiting":
-            return
-        days = rec.get("ref_play_days")
-        if not isinstance(days, list):
-            days = []
-        today = date.today().isoformat()
-        if today not in days:
-            days.append(today)
-        rec["ref_play_days"] = days[-14:]
+    with _USER_RECORD_LOCK:
+        with user_record(uid) as rec:
+            if rec.get("ref_status") != "waiting":
+                return
+            days = rec.get("ref_play_days")
+            if not isinstance(days, list):
+                days = []
+            today = date.today().isoformat()
+            if today not in days:
+                days.append(today)
+            rec["ref_play_days"] = days[-14:]
 
-        games = int(rec.get("games_total", 0) or 0)
-        if games >= REFERRAL_MIN_GAMES and len(set(days)) >= REFERRAL_MIN_DAYS:
-            referrer = rec.get("ref_by")
-            ref_rec = d.get("users", {}).get(str(referrer))
-            if isinstance(ref_rec, dict):
-                rec["ref_status"] = "pending"
-                pending = ref_rec.get("ref_pending")
-                if not isinstance(pending, list):
-                    pending = []
-                if str(uid) not in pending:
-                    pending.append(str(uid))
-                ref_rec["ref_pending"] = pending
-            else:
-                # Пригласивший пропал из базы — засчитывать некому.
-                rec["ref_status"] = "orphaned"
-                referrer = None
-        save_data(d)
+            games = int(rec.get("games_total", 0) or 0)
+            if games >= REFERRAL_MIN_GAMES and len(set(days)) >= REFERRAL_MIN_DAYS:
+                referrer = rec.get("ref_by")
+                if referrer and user_exists(referrer, db_path=DB_FILE):
+                    rec["ref_status"] = "pending"
+                    with user_record(referrer) as ref_rec:
+                        pending = ref_rec.get("ref_pending")
+                        if not isinstance(pending, list):
+                            pending = []
+                        if str(uid) not in pending:
+                            pending.append(str(uid))
+                        ref_rec["ref_pending"] = pending
+                else:
+                    # Пригласивший пропал из базы — засчитывать некому.
+                    rec["ref_status"] = "orphaned"
+                    referrer = None
     if referrer:
         _referral_flush(referrer)
 
@@ -1676,50 +1699,48 @@ def _referral_track_play(uid):
 def _referral_flush(referrer_uid):
     """Начисляет награды за друзей в очереди в пределах дневного лимита."""
     events = []
-    with _referral_lock:
-        d = load_data()
-        users = d.get("users", {})
-        rec = users.get(str(referrer_uid))
-        if not isinstance(rec, dict):
+    queued = 0
+    with _USER_RECORD_LOCK:
+        if not load_user_record(referrer_uid).get("ref_pending"):
             return []
-        pending = rec.get("ref_pending")
-        if not isinstance(pending, list) or not pending:
-            return []
+        with user_record(referrer_uid) as rec:
+            pending = rec.get("ref_pending")
+            if not isinstance(pending, list):
+                pending = []
 
-        today = date.today().isoformat()
-        if rec.get("ref_credit_day") != today:
-            rec["ref_credit_day"] = today
-            rec["ref_credit_today"] = 0
-        reached = rec.get("ref_milestones")
-        if not isinstance(reached, list):
-            reached = []
+            today = date.today().isoformat()
+            if rec.get("ref_credit_day") != today:
+                rec["ref_credit_day"] = today
+                rec["ref_credit_today"] = 0
+            reached = rec.get("ref_milestones")
+            if not isinstance(reached, list):
+                reached = []
 
-        while pending and int(rec.get("ref_credit_today", 0)) < REFERRAL_DAILY_LIMIT:
-            friend = pending.pop(0)
-            friend_rec = users.get(friend)
-            if isinstance(friend_rec, dict):
-                if friend_rec.get("ref_status") == "credited":
-                    continue
-                friend_rec["ref_status"] = "credited"
-            credited = int(rec.get("ref_credited", 0) or 0) + 1
-            rec["ref_credited"] = credited
-            rec["ref_credit_today"] = int(rec.get("ref_credit_today", 0)) + 1
-            gain = REFERRAL_REWARD
-            bonus = 0
-            for need, amount in REFERRAL_MILESTONES:
-                if credited >= need and need not in reached:
-                    reached.append(need)
-                    bonus += amount
-            rec["coins"] = int(rec.get("coins", 0) or 0) + gain + bonus
-            rec["ref_earned"] = int(rec.get("ref_earned", 0) or 0) + gain + bonus
-            name = (friend_rec or {}).get("display_name") or friend
-            events.append((name, gain, bonus, credited))
+            while pending and int(rec.get("ref_credit_today", 0)) < REFERRAL_DAILY_LIMIT:
+                friend = pending.pop(0)
+                friend_name = friend
+                if user_exists(friend, db_path=DB_FILE):
+                    with user_record(friend) as friend_rec:
+                        if friend_rec.get("ref_status") == "credited":
+                            continue
+                        friend_rec["ref_status"] = "credited"
+                        friend_name = friend_rec.get("display_name") or friend
+                credited = int(rec.get("ref_credited", 0) or 0) + 1
+                rec["ref_credited"] = credited
+                rec["ref_credit_today"] = int(rec.get("ref_credit_today", 0)) + 1
+                gain = REFERRAL_REWARD
+                bonus = 0
+                for need, amount in REFERRAL_MILESTONES:
+                    if credited >= need and need not in reached:
+                        reached.append(need)
+                        bonus += amount
+                rec["coins"] = int(rec.get("coins", 0) or 0) + gain + bonus
+                rec["ref_earned"] = int(rec.get("ref_earned", 0) or 0) + gain + bonus
+                events.append((friend_name, gain, bonus, credited))
 
-        rec["ref_pending"] = pending
-        rec["ref_milestones"] = reached
-        if events:
-            save_data(d)
-        queued = len(pending)
+            rec["ref_pending"] = pending
+            rec["ref_milestones"] = reached
+            queued = len(pending)
 
     for name, gain, bonus, credited in events:
         text = localized_text(
@@ -1758,7 +1779,7 @@ def _referral_notify(uid, text):
 
 
 def _referral_stats(uid):
-    rec = load_data().get("users", {}).get(str(uid), {}) or {}
+    rec = load_user_record(uid)
     invited = rec.get("ref_invited") if isinstance(rec.get("ref_invited"), list) else []
     pending = rec.get("ref_pending") if isinstance(rec.get("ref_pending"), list) else []
     credited = int(rec.get("ref_credited", 0) or 0)
@@ -1862,17 +1883,17 @@ def _record_game_result_once(user_id, game_key, result, session_id, extra=None):
     if not sid:
         _record_game_result(user_id, game_key, result, extra=extra)
         return
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
-    seen = rec.get("scored_sessions")
-    if not isinstance(seen, list):
-        seen = []
     uniq = f"{game_key}:{sid}"
-    if uniq in seen:
+    with user_record(user_id) as rec:
+        seen = rec.get("scored_sessions")
+        if not isinstance(seen, list):
+            seen = []
+        duplicate = uniq in seen
+        if not duplicate:
+            seen.append(uniq)
+            rec["scored_sessions"] = seen[-1000:]
+    if duplicate:
         return
-    seen.append(uniq)
-    rec["scored_sessions"] = seen[-1000:]
-    save_data(d)
     _record_game_result(user_id, game_key, result, extra=extra)
 
 
@@ -2430,23 +2451,22 @@ def _empty_quests_progress():
     }
 
 
-def get_user_quests_progress(user_id):
-    data = load_data()
-    rec = data.setdefault("users", {}).setdefault(str(user_id), {})
-    progress = rec.setdefault("quests_progress", _empty_quests_progress())
+def _quests_progress_in(rec):
+    progress = rec.get("quests_progress")
+    if not isinstance(progress, dict):
+        progress = rec["quests_progress"] = _empty_quests_progress()
     for key, default in _empty_quests_progress().items():
         progress.setdefault(key, default)
-    save_data(data)
     return progress
 
 
+def get_user_quests_progress(user_id):
+    with user_record(user_id) as rec:
+        return _quests_progress_in(rec)
+
+
 def _notify_quest_completed(user_id, quest):
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
-    rec = _ensure_profile_fields(rec)
-    if not rec.get("notifications_enabled", True):
-        d["users"][str(user_id)] = rec
-        save_data(d)
+    if not load_user_record(user_id).get("notifications_enabled", True):
         return
     try:
         bot.send_message(
@@ -2459,18 +2479,24 @@ def _notify_quest_completed(user_id, quest):
     except Exception as e:
         log_exception("notify_quest_completed", e, user_id=user_id)
 
+# (пользователь, тип квестов) → период, который уже проверен в этом процессе.
+# Сброс нужен раз в день/неделю/месяц, а вызывается на каждую партию.
+_QUEST_RESET_SEEN = {}
+
+
 def _reset_quest_bucket(user_id, quest_type, period_id):
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
-    progress = rec.setdefault("quests_progress", _empty_quests_progress())
-    stamp_key = f"last_{quest_type}_reset"
-    if progress.get(stamp_key) == period_id:
+    seen_key = (str(user_id), quest_type)
+    if _QUEST_RESET_SEEN.get(seen_key) == period_id:
         return
-    quest_ids = {q["id"] for q in QUESTS.get(quest_type, [])}
-    progress[stamp_key] = period_id
-    progress[quest_type] = {qid: 0 for qid in quest_ids}
-    progress["claimed"] = [qid for qid in progress.get("claimed", []) if qid not in quest_ids]
-    save_data(d)
+    with user_record(user_id) as rec:
+        progress = _quests_progress_in(rec)
+        stamp_key = f"last_{quest_type}_reset"
+        if progress.get(stamp_key) != period_id:
+            quest_ids = {q["id"] for q in QUESTS.get(quest_type, [])}
+            progress[stamp_key] = period_id
+            progress[quest_type] = {qid: 0 for qid in quest_ids}
+            progress["claimed"] = [qid for qid in progress.get("claimed", []) if qid not in quest_ids]
+    _QUEST_RESET_SEEN[seen_key] = period_id
 
 
 def reset_daily_quests(user_id):
@@ -2491,42 +2517,38 @@ def update_quest_progress(user_id, quest_type, quest_id, amount=1):
         reset_weekly_quests(user_id)
     elif quest_type == "seasonal":
         reset_seasonal_quests(user_id)
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
-    progress = rec.setdefault("quests_progress", _empty_quests_progress())
-    for key, default in _empty_quests_progress().items():
-        progress.setdefault(key, default)
-    if quest_id in progress.get(quest_type, {}):
-        previous = int(progress[quest_type].get(quest_id, 0) or 0)
-        progress[quest_type][quest_id] = previous + amount
-        save_data(d)
-        quest = next((q for q in QUESTS.get(quest_type, []) if q.get("id") == quest_id), None)
-        if quest and previous < int(quest.get("target", 0) or 0) <= progress[quest_type][quest_id]:
-            if quest_id not in progress["notified"]:
-                progress["notified"].append(quest_id)
-                save_data(d)
-                _notify_quest_completed(user_id, quest)
+    completed = None
+    with user_record(user_id) as rec:
+        progress = _quests_progress_in(rec)
+        if quest_id in progress.get(quest_type, {}):
+            previous = int(progress[quest_type].get(quest_id, 0) or 0)
+            progress[quest_type][quest_id] = previous + amount
+            quest = next((q for q in QUESTS.get(quest_type, []) if q.get("id") == quest_id), None)
+            if quest and previous < int(quest.get("target", 0) or 0) <= progress[quest_type][quest_id]:
+                if quest_id not in progress["notified"]:
+                    progress["notified"].append(quest_id)
+                    completed = quest
+    if completed:
+        _notify_quest_completed(user_id, completed)
 
 def claim_quest_reward(user_id, quest_type, quest_id):
-    progress = get_user_quests_progress(user_id)
-    if quest_id not in progress[quest_type]:
-        return False
-    quest = next((q for q in QUESTS[quest_type] if q["id"] == quest_id), None)
+    quest = next((q for q in QUESTS.get(quest_type, []) if q["id"] == quest_id), None)
     if not quest:
         return False
-    if progress[quest_type][quest_id] < quest["target"]:
-        return False
-    if quest_id in progress.get("claimed", []):
-        return False
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
-    reward = quest["reward"]
-    for field in ("coins", "xp"):
-        if field in reward:
-            rec[field] = rec.get(field, 0) + reward[field]
-    progress["claimed"].append(quest_id)
-    rec["quests_progress"] = progress
-    save_data(d)
+    # Проверка и начисление в одной записи: двойное нажатие не выдаст награду дважды.
+    with user_record(user_id) as rec:
+        progress = _quests_progress_in(rec)
+        if quest_id not in progress.get(quest_type, {}):
+            return False
+        if progress[quest_type][quest_id] < quest["target"]:
+            return False
+        if quest_id in progress.get("claimed", []):
+            return False
+        reward = quest["reward"]
+        for field in ("coins", "xp"):
+            if field in reward:
+                rec[field] = rec.get(field, 0) + reward[field]
+        progress["claimed"].append(quest_id)
     return True
 
 def _pong_record_results(state, gid):
@@ -4122,6 +4144,7 @@ def _telos_run_command(st, cmd):
 def ask_ai(prompt: str, user_id: int) -> str:
     if not prompt.strip():
         return "⚠️ Напишите вопрос текстом"
+    nvmapi_client = get_nvmapi_client()
     if not nvmapi_client:
         return "⚠️ AI временно недоступен: не задан NVMAPI_KEY."
 
@@ -5767,13 +5790,10 @@ def party_create_cmd(message):
             "Не удалось создать ссылку — проверьте права бота в группе."
         )
 
-    d2 = load_data()
-    rec = d2.setdefault("users", {}).setdefault(str(creator.id), {})
-    rec = _ensure_profile_fields(rec)
-    rec["rooms_created"] = int(rec.get("rooms_created", 0) or 0) + 1
-    d2["users"][str(creator.id)] = rec
-    save_data(d2)
-    _check_achievements(creator.id, rec)
+    with user_record(creator.id) as rec:
+        _ensure_profile_fields(rec)
+        rec["rooms_created"] = int(rec.get("rooms_created", 0) or 0) + 1
+    _check_achievements(creator.id)
 
     try:
         kb = types.InlineKeyboardMarkup()
