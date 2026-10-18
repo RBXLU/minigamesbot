@@ -88,5 +88,57 @@
       "type": "play_specific_game",
       "game": "g2048"
     }
+  ],
+  "halloween": [
+    {
+      "id": "hw_play_20",
+      "title": "Ночная смена",
+      "description": "Сыграйте 20 партий во время ивента",
+      "reward": {"pumpkins": 25},
+      "target": 20,
+      "type": "count_games"
+    },
+    {
+      "id": "hw_win_10",
+      "title": "Гроза нечисти",
+      "description": "Выиграйте 10 партий во время ивента",
+      "reward": {"pumpkins": 30},
+      "target": 10,
+      "type": "count_wins"
+    },
+    {
+      "id": "hw_graveyard",
+      "title": "Прогулка по кладбищу",
+      "description": "Сыграйте 3 раза в сапёра-«Кладбище»",
+      "reward": {"pumpkins": 15},
+      "target": 3,
+      "type": "play_specific_game",
+      "game": "minesweeper"
+    },
+    {
+      "id": "hw_spooky_words",
+      "title": "Жуткие слова",
+      "description": "Угадайте 3 слова в хеллоуинской виселице",
+      "reward": {"pumpkins": 20},
+      "target": 3,
+      "type": "win_specific_game",
+      "game": "hangman"
+    },
+    {
+      "id": "hw_hunter",
+      "title": "Охотник на тыквы",
+      "description": "Поймайте 3 тыквы на охоте в группах",
+      "reward": {"pumpkins": 20},
+      "target": 3,
+      "type": "catch_pumpkin"
+    },
+    {
+      "id": "hw_party",
+      "title": "Вечеринка в комнате",
+      "description": "Сыграйте 2 игры в комнате с друзьями",
+      "reward": {"pumpkins": 15},
+      "target": 2,
+      "type": "play_room_game"
+    }
   ]
 }

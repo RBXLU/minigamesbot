@@ -33,11 +33,13 @@ from core.db import (
     load_state,
     load_user,
     log_admin_action,
+    read_state_key,
     save_state as save_state_to_db,
     save_user,
     update_state_key,
     user_exists,
 )
+from core import events as ev
 from room_games import (
     ROOM_VOTE_GAMES,
     cleanup_room_runtime_state,
@@ -190,6 +192,7 @@ TRANSLATIONS = {
         "settings": "⚙️ Налаштування",
         "quests": "Квести",
         "invite": "🤝 Запросити друга",
+        "event": "🎃 Ніч гарбузів",
         "create_room": "🚪 Створити кімнату",
         "choose_language": "🌍 Оберіть мову:",
         "language_changed": "✅ Мову змінено!",
@@ -222,6 +225,7 @@ TRANSLATIONS = {
         "settings": "⚙️ Настройки",
         "quests": "Квесты",
         "invite": "🤝 Пригласить друга",
+        "event": "🎃 Ночь тыкв",
         "create_room": "🚪 Создать комнату",
         "choose_language": "🌍 Выберите язык:",
         "language_changed": "✅ Язык изменён!",
@@ -254,6 +258,7 @@ TRANSLATIONS = {
         "settings": "⚙️ Settings",
         "quests": "Quests",
         "invite": "🤝 Invite a friend",
+        "event": "🎃 Pumpkin Night",
         "create_room": "🚪 Create Room",
         "choose_language": "🌍 Choose language:",
         "language_changed": "✅ Language changed!",
@@ -1438,15 +1443,30 @@ def _get_blackjack_wins(rec):
     return int((row or {}).get("wins", 0) or 0)
 
 
+def _active_quest_buckets():
+    """Наборы квестов, видимые сейчас: ивентовый появляется только на время ивента."""
+    buckets = ["daily", "weekly", "seasonal"]
+    if halloween_active() and QUESTS.get(ev.HALLOWEEN):
+        buckets.append(ev.HALLOWEEN)
+    return tuple(buckets)
+
+
+def reset_halloween_quests(user_id):
+    if halloween_active():
+        start, _ = ev.event_window(ev.HALLOWEEN)
+        _reset_quest_bucket(user_id, ev.HALLOWEEN, f"{ev.HALLOWEEN}-{start.year}")
+
+
 def _reset_quests(user_id):
     reset_daily_quests(user_id)
     reset_weekly_quests(user_id)
     reset_seasonal_quests(user_id)
+    reset_halloween_quests(user_id)
 
 
 def _update_matching_quests(user_id, event_type, game_key=None, amount=1):
     _reset_quests(user_id)
-    for quest_type in ("daily", "weekly", "seasonal"):
+    for quest_type in _active_quest_buckets():
         for quest in QUESTS.get(quest_type, []):
             qtype = quest.get("type")
             qgame = quest.get("game")
@@ -1529,6 +1549,7 @@ def _record_game_play(user_id, game_key, display_name=None, session_id=None):
     _update_matching_quests(user_id, "count_games_weekly", game_key=game_key)
     _update_matching_quests(user_id, "count_games_seasonal", game_key=game_key)
     _check_achievements(user_id)
+    award_pumpkins(user_id, ev.pumpkins_per_play(), "game")
     if rec.get("ref_status") == "waiting":
         _referral_track_play(user_id)
     if rec.get("ref_pending"):
@@ -1569,7 +1590,336 @@ def _record_game_result(user_id, game_key, result, extra=None):
     if result == "wins":
         _update_matching_quests(user_id, "count_wins", game_key=game_key)
         _update_matching_quests(user_id, "win_specific_game", game_key=game_key)
+        award_pumpkins(user_id, ev.pumpkins_per_win(), "game")
     _check_achievements(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Хеллоуин «Ночь тыкв»
+#
+# Тыквы — отдельная валюта ивента: падают за партии и на охоте в группах,
+# тратятся только в хеллоуин-лавке и в монеты не превращаются, поэтому
+# экономику магазина не раздувают. Правила и даты — в core/events.py.
+# ---------------------------------------------------------------------------
+EVENT_SHOP_ITEMS = {
+    "avatar_pumpkin": {"name": "Аватар: Тыква", "type": "avatar", "value": "🎃", "price": 30},
+    "avatar_ghost": {"name": "Аватар: Призрак", "type": "avatar", "value": "👻", "price": 40},
+    "avatar_bat": {"name": "Аватар: Летучая мышь", "type": "avatar", "value": "🦇", "price": 50},
+    "avatar_vampire": {"name": "Аватар: Вампир", "type": "avatar", "value": "🧛", "price": 80},
+    "victory_skull": {"name": "Эффект победы: Череп", "type": "victory", "value": "💀", "price": 100},
+    "frame_web": {"name": "Рамка: Паутина", "type": "frame", "value": "web", "price": 120},
+    "theme_halloween": {"name": "Тема: Хеллоуин", "type": "theme", "value": "halloween", "price": 150},
+}
+# Не продаются: выдаются за общую цель ивента и за годовщину.
+REWARD_ITEMS = {
+    "avatar_full_moon": {"name": "Аватар: Полная луна", "type": "avatar", "value": "🌕", "price": 0},
+}
+
+
+def _shop_item(item_id):
+    return SHOP_ITEMS.get(item_id) or EVENT_SHOP_ITEMS.get(item_id) or REWARD_ITEMS.get(item_id)
+
+
+def halloween_active():
+    return ev.is_event_active(ev.HALLOWEEN)
+
+
+def _hw_bucket(rec):
+    events = rec.get("events")
+    if not isinstance(events, dict):
+        events = rec["events"] = {}
+    bucket = events.get(ev.HALLOWEEN)
+    if not isinstance(bucket, dict):
+        bucket = events[ev.HALLOWEEN] = ev.new_bucket()
+    for key, value in ev.new_bucket().items():
+        bucket.setdefault(key, value)
+    return bucket
+
+
+def _hw_state():
+    state = read_state_key("events", {}, db_path=DB_FILE) or {}
+    hw = state.get(ev.HALLOWEEN)
+    return hw if isinstance(hw, dict) else {}
+
+
+def _hw_total():
+    return int(_hw_state().get("total", 0) or 0)
+
+
+def _hw_bump_total(amount):
+    def bump(state):
+        state = state if isinstance(state, dict) else {}
+        hw = state.setdefault(ev.HALLOWEEN, {})
+        hw["total"] = int(hw.get("total", 0) or 0) + int(amount)
+        return state
+    return update_state_key("events", bump, default={}, db_path=DB_FILE)
+
+
+def award_pumpkins(uid, amount, source):
+    """Начисляет тыквы во время ивента; возвращает, сколько реально начислено."""
+    if amount <= 0 or not halloween_active():
+        return 0
+    with user_record(uid) as rec:
+        got = ev.credit(_hw_bucket(rec), amount, source)
+    if got:
+        _hw_bump_total(got)
+    return got
+
+
+HW_TITLE = "👑🎃 Король тыкв 2026"
+HW_TOP_SIZE = 10
+
+
+def _fmt_num(value):
+    return f"{int(value):,}".replace(",", " ")
+
+
+def _reward_text(reward):
+    parts = []
+    if reward.get("coins"):
+        parts.append(f"{reward['coins']} 🪙")
+    if reward.get("xp"):
+        parts.append(f"{reward['xp']} XP")
+    if reward.get("pumpkins"):
+        parts.append(f"{reward['pumpkins']} 🎃")
+    if reward.get("item"):
+        item = _shop_item(reward["item"])
+        parts.append(item["name"] if item else reward["item"])
+    return ", ".join(parts) or "—"
+
+
+def _hw_ranking():
+    """Все игроки с тыквами, по убыванию добытого. Полный проход по базе —
+    только при открытии рейтинга, не на каждое нажатие."""
+    rows = []
+    for uid_str, rec in load_data().get("users", {}).items():
+        if not isinstance(rec, dict):
+            continue
+        bucket = (rec.get("events") or {}).get(ev.HALLOWEEN) or {}
+        earned = int(bucket.get("earned", 0) or 0) if isinstance(bucket, dict) else 0
+        if earned > 0:
+            rows.append((earned, uid_str, str(rec.get("display_name") or f"user_{uid_str}")))
+    rows.sort(key=lambda row: (-row[0], row[1]))
+    return rows
+
+
+def _hw_final_top():
+    """Итоговый топ фиксируется один раз после окончания ивента."""
+    if not ev.is_event_finished(ev.HALLOWEEN):
+        return []
+    stored = _hw_state().get("final_top")
+    if isinstance(stored, list):
+        return stored
+    top = [uid_str for _, uid_str, _ in _hw_ranking()[:HW_TOP_SIZE]]
+
+    def freeze(state):
+        state = state if isinstance(state, dict) else {}
+        hw = state.setdefault(ev.HALLOWEEN, {})
+        hw.setdefault("final_top", top)
+        return state
+    state = update_state_key("events", freeze, default={}, db_path=DB_FILE)
+    return state.get(ev.HALLOWEEN, {}).get("final_top", top)
+
+
+def _grant_event_titles(uid):
+    if str(uid) not in _hw_final_top():
+        return
+    with user_record(uid) as rec:
+        titles = rec.get("titles")
+        if not isinstance(titles, list):
+            titles = rec["titles"] = []
+        if HW_TITLE not in titles:
+            titles.append(HW_TITLE)
+
+
+def _hw_text(uid):
+    rec = load_user_record(uid)
+    bucket = _hw_bucket(rec)
+    total = _hw_total()
+    goal = ev.halloween_goal()
+    _, end = ev.event_window(ev.HALLOWEEN)
+    active = halloween_active()
+    today = date.today().isoformat()
+    lines = ["🎃 <b>Ночь тыкв</b>"]
+    if active:
+        lines.append(f"До {end:%d.%m} включительно · осталось дней: {ev.days_left(ev.HALLOWEEN)}")
+    else:
+        lines.append("Ивент завершён — спасибо всем, кто охотился на тыквы!")
+    lines += [
+        "",
+        f"Ваши тыквы: <b>{bucket['pumpkins']}</b> 🎃",
+        f"Всего добыто: {bucket['earned']} · поймано на охоте: {bucket['caught']}",
+    ]
+    if active:
+        day_games = bucket["day_games"] if bucket.get("day") == today else 0
+        lines += [
+            f"Сегодня за партии: {day_games}/{ev.pumpkins_daily_game_cap()}",
+            "",
+            "<b>Как добыть тыквы</b>",
+            f"• партия — {ev.pumpkins_per_play()} 🎃, победа — ещё {ev.pumpkins_per_win()} 🎃",
+            "• охота: в группах с ботом иногда выкатывается тыква — кто первым нажал, тот и забрал",
+            "• хеллоуинские квесты в разделе «Квесты»",
+            "• сапёр, виселица, крестики-нолики и понг на время ивента в хеллоуинском виде",
+        ]
+    lines += [
+        "",
+        "<b>Общая цель</b> — все вместе",
+        f"{ev.progress_bar(total, goal)} {_fmt_num(total)} / {_fmt_num(goal)}",
+    ]
+    for need, reward in ev.HALLOWEEN_GOALS:
+        mark = "✅" if total >= need else "▫️"
+        lines.append(f"{mark} {_fmt_num(need)} 🎃 — всем участникам: {_reward_text(reward)}")
+    if ev.claimable_goals(total, bucket):
+        lines += ["", "🎁 Вам доступны награды общей цели!"]
+    return "\n".join(lines)
+
+
+def _hw_kb(uid):
+    kb = types.InlineKeyboardMarkup()
+    if halloween_active():
+        kb.row(
+            types.InlineKeyboardButton("🛍 Лавка", callback_data="hw_shop"),
+            types.InlineKeyboardButton("🏆 Топ тыкв", callback_data="hw_top"),
+        )
+    else:
+        kb.add(types.InlineKeyboardButton("🏆 Итоговый топ", callback_data="hw_top"))
+    if ev.claimable_goals(_hw_total(), _hw_bucket(load_user_record(uid))):
+        kb.add(types.InlineKeyboardButton("🎁 Забрать награды общей цели", callback_data="hw_claim"))
+    kb.add(types.InlineKeyboardButton("🔄 Обновить", callback_data="hw_open"))
+    return kb
+
+
+def _hw_shop_text(uid):
+    rec = load_user_record(uid)
+    owned = set(rec.get("inventory", []))
+    lines = [
+        "🛍 <b>Хеллоуин-лавка</b>",
+        f"Ваши тыквы: <b>{_hw_bucket(rec)['pumpkins']}</b> 🎃",
+        "Предметы продаются только до конца ивента и останутся у вас навсегда.",
+        "",
+    ]
+    for item_id, item in EVENT_SHOP_ITEMS.items():
+        mark = "✅ куплено" if item_id in owned else f"{item['price']} 🎃"
+        lines.append(f"• {item['name']} — {mark}")
+    return "\n".join(lines)
+
+
+def _hw_shop_kb(uid):
+    owned = set(load_user_record(uid).get("inventory", []))
+    kb = types.InlineKeyboardMarkup()
+    for item_id, item in EVENT_SHOP_ITEMS.items():
+        if item_id in owned:
+            kb.add(types.InlineKeyboardButton(f"✅ {item['name']}", callback_data=f"shop_apply_{item_id}"))
+        else:
+            kb.add(types.InlineKeyboardButton(f"🎃 {item['name']} ({item['price']})", callback_data=f"hw_buy_{item_id}"))
+    kb.add(types.InlineKeyboardButton("↩️ К ивенту", callback_data="hw_open"))
+    return kb
+
+
+def _hw_top_text(uid):
+    rows = _hw_ranking()
+    finished = ev.is_event_finished(ev.HALLOWEEN)
+    lines = ["🏆 <b>Итоговый топ тыкв</b>" if finished else "🏆 <b>Топ тыкв</b>"]
+    lines.append(f"Первые {HW_TOP_SIZE} после ивента получат титул «{HW_TITLE}» — его не купить.")
+    lines.append("")
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for place, (earned, _, name) in enumerate(rows[:HW_TOP_SIZE], 1):
+        lines.append(f"{medals.get(place, f'{place}.')} {html.escape(name)} — {_fmt_num(earned)} 🎃")
+    if not rows:
+        lines.append("Пока никто не добыл ни одной тыквы. Станьте первым!")
+    mine = next((i for i, row in enumerate(rows, 1) if row[1] == str(uid)), None)
+    if mine and mine > HW_TOP_SIZE:
+        lines += ["", f"Ваше место: {mine} из {len(rows)}"]
+    return "\n".join(lines)
+
+
+def show_halloween(chat_id, uid):
+    bot.send_message(chat_id, _hw_text(uid), parse_mode="HTML", reply_markup=_hw_kb(uid))
+
+
+@bot.message_handler(commands=["event", "halloween"])
+def halloween_cmd(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="event"):
+        return
+    if not halloween_active() and not ev.is_event_finished(ev.HALLOWEEN):
+        start, _ = ev.event_window(ev.HALLOWEEN)
+        bot.send_message(message.chat.id, f"🎃 «Ночь тыкв» начнётся {start:%d.%m}. Готовьте фонари!")
+        return
+    show_halloween(message.chat.id, uid)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("hw_"))
+def halloween_callbacks(call):
+    uid = call.from_user.id
+    try:
+        data = call.data
+        if data == "hw_open":
+            safe_edit_message(call, _hw_text(uid), reply_markup=_hw_kb(uid), parse_mode="HTML")
+            bot.answer_callback_query(call.id)
+        elif data == "hw_shop":
+            if not halloween_active():
+                bot.answer_callback_query(call.id, "Лавка закрылась вместе с ивентом", show_alert=True)
+                return
+            safe_edit_message(call, _hw_shop_text(uid), reply_markup=_hw_shop_kb(uid), parse_mode="HTML")
+            bot.answer_callback_query(call.id)
+        elif data == "hw_top":
+            back = types.InlineKeyboardMarkup()
+            back.add(types.InlineKeyboardButton("↩️ К ивенту", callback_data="hw_open"))
+            safe_edit_message(call, _hw_top_text(uid), reply_markup=back, parse_mode="HTML")
+            bot.answer_callback_query(call.id)
+        elif data.startswith("hw_buy_"):
+            _hw_buy(call, uid, data[len("hw_buy_"):])
+        elif data == "hw_claim":
+            _hw_claim(call, uid)
+        else:
+            bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("halloween_callbacks", e, user_id=uid)
+        bot.answer_callback_query(call.id, "Ошибка ивента")
+
+
+def _hw_buy(call, uid, item_id):
+    item = EVENT_SHOP_ITEMS.get(item_id)
+    if not item or not halloween_active():
+        bot.answer_callback_query(call.id, "Лавка закрыта", show_alert=True)
+        return
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        inv = rec.setdefault("inventory", [])
+        if item_id in inv:
+            note = "Уже куплено"
+        elif not ev.spend(_hw_bucket(rec), item["price"]):
+            note = f"Не хватает тыкв: нужно {item['price']} 🎃"
+        else:
+            inv.append(item_id)
+            _apply_cosmetic(rec, item_id, item)
+            note = f"🎃 Куплено и надето: {item['name']}"
+    bot.answer_callback_query(call.id, note, show_alert=note.startswith("Не хватает"))
+    safe_edit_message(call, _hw_shop_text(uid), reply_markup=_hw_shop_kb(uid), parse_mode="HTML")
+
+
+def _hw_claim(call, uid):
+    total = _hw_total()
+    granted = []
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        bucket = _hw_bucket(rec)
+        for need in ev.claimable_goals(total, bucket):
+            reward = ev.goal_reward(need)
+            if reward.get("coins"):
+                rec["coins"] = int(rec.get("coins", 0) or 0) + int(reward["coins"])
+            if reward.get("item"):
+                inv = rec.setdefault("inventory", [])
+                if reward["item"] not in inv:
+                    inv.append(reward["item"])
+            bucket["claimed_goals"].append(need)
+            granted.append(_reward_text(reward))
+    if granted:
+        bot.answer_callback_query(call.id, "🎁 Получено: " + "; ".join(granted), show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "Новых наград пока нет")
+    safe_edit_message(call, _hw_text(uid), reply_markup=_hw_kb(uid), parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -2002,8 +2352,27 @@ def _load_profile(uid):
     return user, user["achievements"]
 
 
+def _profile_style_line(user):
+    names = []
+    for kind, label in (("frame", "Рамка"), ("theme", "Тема")):
+        item = _shop_item(user.get(f"{kind}_item_id") or "")
+        if item:
+            names.append(f"{label}: {item['name'].split(': ', 1)[-1]}")
+    names.append(f"Победа: {user.get('victory_emoji', '🎉')}")
+    return "🎨 " + " · ".join(names)
+
+
 def _render_profile_text(uid):
+    _grant_event_titles(uid)
     user, unlocked = _load_profile(uid)
+    extra = []
+    titles = user.get("titles") if isinstance(user.get("titles"), list) else []
+    if titles:
+        extra.append("🏷 " + " · ".join(titles))
+    bucket = (user.get("events") or {}).get(ev.HALLOWEEN)
+    if halloween_active() or (isinstance(bucket, dict) and bucket.get("pumpkins")):
+        pumpkins = int((bucket or {}).get("pumpkins", 0) or 0)
+        extra.append(f"🎃 Тыквы: {pumpkins}")
     return render_profile_text(
         uid=uid,
         user=user,
@@ -2011,6 +2380,8 @@ def _render_profile_text(uid):
         achievements_count=len(unlocked),
         achievements_total=len(ACHIEVEMENTS),
         get_game_title=get_game_title,
+        extra_lines=extra,
+        style_line=_profile_style_line(user),
     )
 
 def _render_achievements_text(uid):
@@ -2028,7 +2399,7 @@ def _quest_completion_summary(uid):
     progress = get_user_quests_progress(uid)
     completed = 0
     total = 0
-    for quest_type in ("daily", "weekly", "seasonal"):
+    for quest_type in _active_quest_buckets():
         for quest in QUESTS.get(quest_type, []):
             total += 1
             if int(progress.get(quest_type, {}).get(quest["id"], 0) or 0) >= int(quest.get("target", 0) or 0):
@@ -2387,6 +2758,24 @@ def _rooms_watchdog():
         _shutdown_event.wait(30)
 
 
+def _apply_cosmetic(rec, item_id, item):
+    field = {
+        "avatar": "avatar_emoji",
+        "frame": "frame_style",
+        "theme": "theme_style",
+        "victory": "victory_emoji",
+    }.get(item["type"])
+    if field:
+        rec[field] = item["value"]
+        rec[f"{item['type']}_item_id"] = item_id
+
+
+def _owned_special_items(rec):
+    """Ивентовые и наградные предметы игрока: в обычной витрине их не купить."""
+    inv = rec.get("inventory", [])
+    return [(i, _shop_item(i)) for i in inv if i not in SHOP_ITEMS and _shop_item(i)]
+
+
 def _shop_render_text(uid):
     rec, _ = _load_profile(uid)
     owned = set(rec.get("inventory", []))
@@ -2409,6 +2798,13 @@ def _shop_render_text(uid):
             mark = "✅ куплено" if item_id in owned else f"{item['price']} 🪙"
             lines.append(f"• {item['name']} — {mark}")
         lines.append("")
+    special = _owned_special_items(rec)
+    if special:
+        lines.append("🎁 Особые предметы")
+        lines.extend(f"• {item['name']}" for _, item in special)
+        lines.append("")
+    if halloween_active():
+        lines.append("🎃 Идёт «Ночь тыкв»: загляните в хеллоуин-лавку!")
     return "\n".join(lines)
 
 
@@ -2421,6 +2817,10 @@ def _shop_items_kb(uid):
             kb.add(types.InlineKeyboardButton(f"✅ {item['name']}", callback_data=f"shop_apply_{item_id}"))
         else:
             kb.add(types.InlineKeyboardButton(f"🛍 {item['name']} ({item['price']}🪙)", callback_data=f"shop_buy_{item_id}"))
+    for item_id, item in _owned_special_items(rec):
+        kb.add(types.InlineKeyboardButton(f"✅ {item['name']}", callback_data=f"shop_apply_{item_id}"))
+    if halloween_active():
+        kb.add(types.InlineKeyboardButton("🎃 Хеллоуин-лавка", callback_data="hw_shop"))
     kb.add(types.InlineKeyboardButton("🔄 Обновить", callback_data="shop_open"))
     return kb
 
@@ -2517,6 +2917,8 @@ def update_quest_progress(user_id, quest_type, quest_id, amount=1):
         reset_weekly_quests(user_id)
     elif quest_type == "seasonal":
         reset_seasonal_quests(user_id)
+    elif quest_type == ev.HALLOWEEN:
+        reset_halloween_quests(user_id)
     completed = None
     with user_record(user_id) as rec:
         progress = _quests_progress_in(rec)
@@ -2548,7 +2950,10 @@ def claim_quest_reward(user_id, quest_type, quest_id):
         for field in ("coins", "xp"):
             if field in reward:
                 rec[field] = rec.get(field, 0) + reward[field]
+        pumpkins = ev.credit(_hw_bucket(rec), reward.get("pumpkins", 0), "quest") if reward.get("pumpkins") else 0
         progress["claimed"].append(quest_id)
+    if pumpkins:
+        _hw_bump_total(pumpkins)
     return True
 
 def _pong_record_results(state, gid):
@@ -4202,6 +4607,22 @@ TTT_X = "❌ "
 TTT_SYMBOLS = {" ": "⬜️", TTT_X: TTT_X, "⭕": "⭕️"}
 #: Символы, которыми подсвечивается выигрышная линия.
 TTT_WIN_HIGHLIGHT = {TTT_X: "❎", "⭕": "🅾️"}
+# На время ивента ходы рисуются тыквой и призраком; в состоянии игры
+# по-прежнему хранятся ❌ и ⭕, меняется только отображение.
+TTT_HALLOWEEN_SKIN = {TTT_X: "🎃", "⭕": "👻"}
+TTT_HALLOWEEN_HIGHLIGHT = {TTT_X: "🔥", "⭕": "💫"}
+
+
+def _ttt_show(symbol):
+    if halloween_active():
+        return TTT_HALLOWEEN_SKIN.get(symbol, symbol)
+    return symbol.strip() if symbol == TTT_X else symbol
+
+
+def _ttt_cell_button(value):
+    if value.strip() and halloween_active():
+        return TTT_HALLOWEEN_SKIN.get(value, value)
+    return TTT_SYMBOLS.get(value, "⬜️")
 TTT_WIN_PATTERNS = (
     (0, 1, 2), (3, 4, 5), (6, 7, 8),
     (0, 3, 6), (1, 4, 7), (2, 5, 8),
@@ -4218,11 +4639,11 @@ def ttt_render_header(game, finished=False):
     turn_id = game.get("turn")
     lines = [
         f"Партия {game.get('round', 1)}",
-        f"{TTT_X} {p1_name} — {score1}",
-        f"⭕ {p2_name} — {score2}",
+        f"{_ttt_show(TTT_X)} {p1_name} — {score1}",
+        f"{_ttt_show('⭕')} {p2_name} — {score2}",
     ]
     if not finished:
-        turn_symbol = TTT_X if turn_id == p1_id else "⭕"
+        turn_symbol = _ttt_show(TTT_X if turn_id == p1_id else "⭕")
         turn_name = p1_name if turn_id == p1_id else p2_name
         lines.append(f"\nХодит: {turn_symbol} {turn_name}")
     return "\n".join(lines) + "\n\n"
@@ -4232,7 +4653,10 @@ def ttt_render_board(board, highlight=()):
         value = board[i]
         if not value.strip():
             return "⬜️"
-        return TTT_WIN_HIGHLIGHT.get(value, value) if i in highlight else value
+        if i in highlight:
+            marks = TTT_HALLOWEEN_HIGHLIGHT if halloween_active() else TTT_WIN_HIGHLIGHT
+            return marks.get(value, value)
+        return _ttt_show(value)
 
     return "\n".join(" ".join(cell(r * 3 + c) for c in range(3)) for r in range(3))
 
@@ -4240,7 +4664,7 @@ def ttt_build_keyboard(gid, board):
     kb = types.InlineKeyboardMarkup()
     for r in range(3):
         kb.row(*[
-            types.InlineKeyboardButton(TTT_SYMBOLS.get(board[r * 3 + c], "⬜️"), callback_data=f"ttt_move_{gid}_{r * 3 + c}")
+            types.InlineKeyboardButton(_ttt_cell_button(board[r * 3 + c]), callback_data=f"ttt_move_{gid}_{r * 3 + c}")
             for c in range(3)
         ])
     kb.row(types.InlineKeyboardButton("🔁 Сыграть ещё", callback_data=f"ttt_restart_{gid}"))
@@ -4356,10 +4780,10 @@ def _pm_ttt_render_text(game):
     score1 = game["scores"].get(p1, 0)
     score2 = game["scores"].get(p2, 0)
     lines = [
-        f"{TTT_X} Крестики-нолики",
+        f"{_ttt_show(TTT_X)} Крестики-нолики",
         "",
-        f"{TTT_X} {n1} — {score1}",
-        f"⭕ {n2} — {score2}",
+        f"{_ttt_show(TTT_X)} {n1} — {score1}",
+        f"{_ttt_show('⭕')} {n2} — {score2}",
         "",
     ]
     if game.get("status") == "ended":
@@ -4367,10 +4791,10 @@ def _pm_ttt_render_text(game):
         if winner == "draw":
             lines.append("Итог: ничья")
         else:
-            symbol = TTT_X if winner == p1 else "⭕"
+            symbol = _ttt_show(TTT_X if winner == p1 else "⭕")
             lines.append(f"Победил: {symbol} {game['names'].get(winner, 'Игрок')}")
     else:
-        turn_symbol = TTT_X if game.get("turn") == p1 else "⭕"
+        turn_symbol = _ttt_show(TTT_X if game.get("turn") == p1 else "⭕")
         lines.append(f"Ходит: {turn_symbol} {game['names'].get(game.get('turn'), 'Игрок')}")
     lines.append("")
     lines.append(ttt_render_board(game["board"], game.get("win_line") or ()))
@@ -4391,7 +4815,7 @@ def _pm_ttt_keyboard(gid, game, viewer_id):
         for c in range(3):
             idx = r * 3 + c
             cb = f"pmttt_move_{gid}_{idx}" if active_turn and board[idx] == " " else "none"
-            row.append(types.InlineKeyboardButton(TTT_SYMBOLS.get(board[idx], "⬜️"), callback_data=cb))
+            row.append(types.InlineKeyboardButton(_ttt_cell_button(board[idx]), callback_data=cb))
         kb.row(*row)
     if not active_turn:
         kb.add(types.InlineKeyboardButton("⏳ Ход соперника", callback_data="none"))
@@ -4872,50 +5296,41 @@ def shop_callbacks(call):
             return
         action = parts[1]
         item_id = parts[2]
-        item = SHOP_ITEMS.get(item_id)
+        item = _shop_item(item_id)
         if not item:
             bot.answer_callback_query(call.id, "Товар не найден")
             return
 
-        d = load_data()
-        rec = d.setdefault("users", {}).setdefault(str(uid), {})
-        rec = _ensure_profile_fields(rec)
-        inv = rec.setdefault("inventory", [])
-        coins = int(rec.get("coins", 0) or 0)
-
         if action == "buy":
-            if item_id in inv:
-                bot.answer_callback_query(call.id, "Уже куплено")
-            elif coins < int(item["price"]):
-                bot.answer_callback_query(call.id, "Недостаточно монет")
-            else:
-                rec["coins"] = coins - int(item["price"])
-                inv.append(item_id)
-                rec[f"{item['type']}_item_id"] = item_id
-                d["users"][str(uid)] = rec
-                save_data(d)
-                bot.answer_callback_query(call.id, f"Покупка: {item['name']}")
+            if item_id not in SHOP_ITEMS:
+                bot.answer_callback_query(call.id, "Этот предмет не продаётся за монеты", show_alert=True)
+                return
+            with user_record(uid) as rec:
+                _ensure_profile_fields(rec)
+                inv = rec.setdefault("inventory", [])
+                coins = int(rec.get("coins", 0) or 0)
+                if item_id in inv:
+                    note = "Уже куплено"
+                elif coins < int(item["price"]):
+                    note = "Недостаточно монет"
+                else:
+                    rec["coins"] = coins - int(item["price"])
+                    inv.append(item_id)
+                    rec[f"{item['type']}_item_id"] = item_id
+                    note = f"Покупка: {item['name']}"
+            bot.answer_callback_query(call.id, note)
             safe_edit_message(call, _shop_render_text(uid), reply_markup=_shop_items_kb(uid))
             return
 
         if action == "apply":
-            if item_id not in inv:
+            with user_record(uid) as rec:
+                _ensure_profile_fields(rec)
+                owned = item_id in rec.get("inventory", [])
+                if owned:
+                    _apply_cosmetic(rec, item_id, item)
+            if not owned:
                 bot.answer_callback_query(call.id, "Сначала купите товар")
                 return
-            if item["type"] == "avatar":
-                rec["avatar_emoji"] = item["value"]
-                rec["avatar_item_id"] = item_id
-            elif item["type"] == "frame":
-                rec["frame_style"] = item["value"]
-                rec["frame_item_id"] = item_id
-            elif item["type"] == "theme":
-                rec["theme_style"] = item["value"]
-                rec["theme_item_id"] = item_id
-            elif item["type"] == "victory":
-                rec["victory_emoji"] = item["value"]
-                rec["victory_item_id"] = item_id
-            d["users"][str(uid)] = rec
-            save_data(d)
             safe_edit_message(call, _shop_render_text(uid), reply_markup=_shop_items_kb(uid))
             bot.answer_callback_query(call.id, f"Применено: {item['name']}")
             return
@@ -7356,7 +7771,7 @@ def ttt_move(call):
             round_id = f"{gid}:{game.get('round', 1)}"
             _record_game_result_once(uid, "ttt", "wins", round_id)
             _record_game_result_once(p2 if uid == p1 else p1, "ttt", "losses", round_id)
-            _ttt_show_board(call, gid, game, prefix=f"🎉 Победил {symbol} — {name}!\n\n",
+            _ttt_show_board(call, gid, game, prefix=f"🎉 Победил {_ttt_show(symbol)} — {name}!\n\n",
                             finished=True, highlight=line)
             bot.answer_callback_query(call.id, "Победа!")
             return
@@ -7911,7 +8326,7 @@ def render_pong_state(state):
         field[p2pos][p2x] = "🟩"
     bx, by = state["ball"][0], state["ball"][1]
     if 0 <= bx < W and 0 <= by < H:
-        field[by][bx] = "⚪"
+        field[by][bx] = "🎃" if halloween_active() else "⚪"
     return "\n".join("".join(r) for r in field)
 
 def _new_pong_state():
@@ -8193,11 +8608,44 @@ HANGMAN_STAGES = [
 HANGMAN_ALPHABET = "абвгдежзийклмнопрстуфхцчшщъыьэюя"
 
 
+HALLOWEEN_HANGMAN_WORDS = {
+    "тыква": "Из неё вырезают фонарь Джека",
+    "призрак": "Прозрачный и любит пугать",
+    "ведьма": "Летает на метле",
+    "вампир": "Не отражается в зеркале",
+    "скелет": "Одни кости",
+    "паутина": "Её плетёт паук в углу",
+    "кладбище": "Там стоят надгробия",
+    "метла": "Транспорт колдуньи",
+    "зелье": "Варится в котле",
+    "оборотень": "Превращается в полнолуние",
+    "мумия": "Замотана бинтами",
+    "привидение": "Бродит по старому замку",
+    "полнолуние": "Луна круглая как монета",
+    "колдун": "Знает заклинания",
+    "фонарь": "Светит в темноте",
+    "конфета": "Её просят со словами «сладость или гадость»",
+    "маска": "Прячет лицо",
+    "костюм": "Наряд для вечеринки",
+    "паук": "Восемь лап",
+    "сова": "Ухает по ночам",
+    "череп": "Голова скелета",
+    "склеп": "Подземная гробница",
+    "полночь": "Время, когда всё начинается",
+    "проклятие": "Злое заклятие",
+    "заклинание": "Магические слова",
+    "летучаямышь": "Спит вниз головой",
+}
+
+
 def _hangman_new_game(word=None):
+    if not word and halloween_active():
+        word = random.choice(list(HALLOWEEN_HANGMAN_WORDS))
     word = word or random.choice(list(HANGMAN_WORDS))
     return {
+        "theme": "halloween" if word in HALLOWEEN_HANGMAN_WORDS else "classic",
         "word": word,
-        "hint": HANGMAN_WORDS[word],
+        "hint": HALLOWEEN_HANGMAN_WORDS.get(word) or HANGMAN_WORDS[word],
         "guessed": set(),
         "wrong": set(),
         "attempts": 6,
@@ -8218,7 +8666,8 @@ def render_hangman_state(game, reveal=False):
         for letter in game["word"]
     )
 
-    text = "```\n" + HANGMAN_STAGES[min(len(wrong), len(HANGMAN_STAGES) - 1)] + "\n```\n\n"
+    text = "🎃 Жуткая виселица\n" if game.get("theme") == "halloween" else ""
+    text += "```\n" + HANGMAN_STAGES[min(len(wrong), len(HANGMAN_STAGES) - 1)] + "\n```\n\n"
     text += f"Слово: `{display}`\n"
     text += f"Ошибки: {', '.join(sorted(c.upper() for c in wrong)) if wrong else '-'}\n"
     text += f"Попыток: {'❤️' * left}{'🖤' * (attempts - left)} {left}/{attempts}\n"
@@ -8370,9 +8819,42 @@ MINESWEEPER_DIGITS = ("⬜", "1\ufe0f\u20e3", "2\ufe0f\u20e3", "3\ufe0f\u20e3",
                       "4\ufe0f\u20e3", "5\ufe0f\u20e3", "6\ufe0f\u20e3", "7\ufe0f\u20e3", "8\ufe0f\u20e3")
 
 
+# Скин выбирается при создании партии: начатая во время ивента остаётся
+# «Кладбищем» до конца, даже если ивент закончился посреди игры.
+MINESWEEPER_SKINS = {
+    "classic": {
+        "title": "💣 Сапёр", "mines": "Мин", "flags": "Флажков",
+        "mine": "💣", "boom": "💥", "flag": "🚩",
+        "mode_flag": "🚩 ставим флажки", "mode_open": "🔍 открываем клетки",
+        "btn_flag": "🚩 Ставить флажки", "btn_open": "🔍 Открывать",
+        "toast_flag": "🚩 Режим флажков", "toast_open": "🔍 Режим открытия",
+        "flag_set": "🚩 Флажок поставлен", "flag_unset": "Флажок снят",
+        "flag_blocks": "Снимите флажок, чтобы открыть клетку",
+        "lose": "💥 Вы наткнулись на мину!", "lose_toast": "💥 Мина!",
+        "win": "🎉 Поле разминировано!",
+    },
+    "halloween": {
+        "title": "🪦 Кладбище", "mines": "Призраков", "flags": "Свечей",
+        "mine": "👻", "boom": "💀", "flag": "🕯",
+        "mode_flag": "🕯 ставим свечи", "mode_open": "🔦 обходим могилы",
+        "btn_flag": "🕯 Ставить свечи", "btn_open": "🔦 Обходить",
+        "toast_flag": "🕯 Ставим свечи на подозрительные могилы", "toast_open": "🔦 Обходим кладбище",
+        "flag_set": "🕯 Свеча зажжена", "flag_unset": "Свеча погасла",
+        "flag_blocks": "Сначала погасите свечу",
+        "lose": "💀 Вас утащил призрак!", "lose_toast": "👻 Бу!",
+        "win": "🎃 Кладбище успокоено — все призраки найдены!",
+    },
+}
+
+
+def _ms_skin(game):
+    return MINESWEEPER_SKINS.get(game.get("skin"), MINESWEEPER_SKINS["classic"])
+
+
 def _minesweeper_new_game(size=5, mines=5):
     board, mine_positions = generate_minesweeper_board(size, mines)
     return {
+        "skin": "halloween" if halloween_active() else "classic",
         "board": board,
         "revealed": set(),
         "mine_positions": set(mine_positions),
@@ -8435,30 +8917,32 @@ def _minesweeper_safe_left(game):
 
 
 def _minesweeper_text(game, notice=None):
+    skin = _ms_skin(game)
     size = len(game["board"])
     total = size * size - len(game["mine_positions"])
-    lines = ["💣 Сапёр", f"Мин: {len(game['mine_positions'])} · Флажков: {len(game['flags'])}"
+    lines = [skin["title"], f"{skin['mines']}: {len(game['mine_positions'])} · {skin['flags']}: {len(game['flags'])}"
              f" · Открыто: {len(game['revealed'])}/{total}"]
     if game.get("finished"):
         lines.append(game.get("outcome", "Партия завершена."))
     else:
-        lines.append("Режим: " + ("🚩 ставим флажки" if game.get("flag_mode") else "🔍 открываем клетки"))
+        lines.append("Режим: " + (skin["mode_flag"] if game.get("flag_mode") else skin["mode_open"]))
     if notice:
         lines.append(notice)
     return "\n".join(lines)
 
 
 def _minesweeper_cell_label(game, i, j):
+    skin = _ms_skin(game)
     value = game["board"][i][j]
     if game.get("finished"):
         if (i, j) == game.get("boom"):
-            return "💥"
+            return skin["boom"]
         if (i, j) in game["mine_positions"]:
-            return "🚩" if (i, j) in game["flags"] else "💣"
+            return skin["flag"] if (i, j) in game["flags"] else skin["mine"]
         return MINESWEEPER_DIGITS[value] if (i, j) in game["revealed"] else "⬛"
     if (i, j) in game["revealed"]:
         return MINESWEEPER_DIGITS[value]
-    return "🚩" if (i, j) in game["flags"] else "⬛"
+    return skin["flag"] if (i, j) in game["flags"] else "⬛"
 
 
 def _minesweeper_build_markup(gid, game):
@@ -8479,7 +8963,7 @@ def _minesweeper_build_markup(gid, game):
     else:
         markup.row(
             types.InlineKeyboardButton(
-                "🔍 Открывать" if game.get("flag_mode") else "🚩 Ставить флажки",
+                _ms_skin(game)["btn_open"] if game.get("flag_mode") else _ms_skin(game)["btn_flag"],
                 callback_data=f"minesweeper_{gid}_mode",
             ),
             types.InlineKeyboardButton("🔄 Новая игра", callback_data="minesweeper_new"),
@@ -10092,7 +10576,7 @@ def minesweeper_callback(call):
             safe_edit_message(call, _minesweeper_text(game),
                               reply_markup=_minesweeper_build_markup(gid, game))
             bot.answer_callback_query(
-                call.id, "🚩 Режим флажков" if game["flag_mode"] else "🔍 Режим открытия")
+                call.id, _ms_skin(game)["toast_flag"] if game["flag_mode"] else _ms_skin(game)["toast_open"])
             return
 
         x, y = int(parts[2]), int(parts[3])
@@ -10103,17 +10587,17 @@ def minesweeper_callback(call):
         if game.get("flag_mode"):
             if (x, y) in game["flags"]:
                 game["flags"].discard((x, y))
-                note = "Флажок снят"
+                note = _ms_skin(game)["flag_unset"]
             else:
                 game["flags"].add((x, y))
-                note = "🚩 Флажок поставлен"
+                note = _ms_skin(game)["flag_set"]
             safe_edit_message(call, _minesweeper_text(game),
                               reply_markup=_minesweeper_build_markup(gid, game))
             bot.answer_callback_query(call.id, note)
             return
 
         if (x, y) in game["flags"]:
-            bot.answer_callback_query(call.id, "Снимите флажок, чтобы открыть клетку")
+            bot.answer_callback_query(call.id, _ms_skin(game)["flag_blocks"])
             return
 
         # Первый ход не должен подрываться на мине.
@@ -10123,18 +10607,18 @@ def minesweeper_callback(call):
         if (x, y) in game["mine_positions"]:
             game["finished"] = True
             game["boom"] = (x, y)
-            game["outcome"] = "💥 Вы наткнулись на мину!"
+            game["outcome"] = _ms_skin(game)["lose"]
             _record_game_result_once(call.from_user.id, "minesweeper", "losses", gid)
             safe_edit_message(call, _minesweeper_text(game),
                               reply_markup=_minesweeper_build_markup(gid, game))
-            bot.answer_callback_query(call.id, "💥 Мина!")
+            bot.answer_callback_query(call.id, _ms_skin(game)["lose_toast"])
             return
 
         _minesweeper_open(game, x, y)
         if _minesweeper_safe_left(game) == 0:
             game["finished"] = True
             game["flags"] = set(game["mine_positions"])
-            game["outcome"] = "🎉 Поле разминировано!"
+            game["outcome"] = _ms_skin(game)["win"]
             _record_game_result_once(call.from_user.id, "minesweeper", "wins", gid)
             safe_edit_message(call, _minesweeper_text(game),
                               reply_markup=_minesweeper_build_markup(gid, game))
@@ -10614,8 +11098,74 @@ def admin_wait_input(message):
         bot.send_message(uid, f"✅ Пользователь {target} разбанен.")
         return
 
+# Охота на тыквы: в оживлённый групповой чат иногда выкатывается тыква,
+# первый нажавший её забирает. Не чаще раза в PUMPKIN_HUNT_COOLDOWN на чат,
+# а неподобранная тыква исчезает вместе с прочими брошенными сессиями.
+pumpkin_drops = BoundedGames()
+_hunt_last_drop = {}
+_hunt_lock = threading.Lock()
+
+
+def _maybe_drop_pumpkin(message):
+    if not halloween_active():
+        return
+    chat_id = message.chat.id
+    now = time.time()
+    with _hunt_lock:
+        if now - _hunt_last_drop.get(chat_id, 0) < ev.hunt_cooldown():
+            return
+        if random.random() >= ev.hunt_chance():
+            return
+        _hunt_last_drop[chat_id] = now
+        drop_id = short_id()
+        amount = ev.hunt_reward()
+        pumpkin_drops[drop_id] = {"chat_id": chat_id, "amount": amount}
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(f"🎃 Схватить тыкву (+{amount})", callback_data=f"hunt_{drop_id}"))
+    try:
+        bot.send_message(chat_id, "🎃 В чат закатилась тыква!\nКто первым нажмёт — тот и заберёт.", reply_markup=kb)
+    except Exception as e:
+        log_exception("pumpkin_drop", e)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("hunt_"))
+def pumpkin_hunt_claim(call):
+    uid = call.from_user.id
+    try:
+        drop_id = call.data[len("hunt_"):]
+        if not user_exists(uid, db_path=DB_FILE):
+            bot.answer_callback_query(
+                call.id, f"Чтобы ловить тыквы, запустите бота: @{INLINE_BOT_USERNAME}", show_alert=True)
+            return
+        with _hunt_lock:
+            drop = pumpkin_drops.pop(drop_id, None)
+        if not drop:
+            bot.answer_callback_query(call.id, "Тыква уже укатилась 🎃💨")
+            return
+        got = award_pumpkins(uid, drop["amount"], "hunt")
+        if not got:
+            bot.answer_callback_query(call.id, "Ивент уже закончился — тыква превратилась в карету")
+            return
+        _update_matching_quests(uid, "catch_pumpkin")
+        name = html.escape(call.from_user.first_name or call.from_user.username or str(uid))
+        safe_edit_message(
+            call,
+            f"🎃 Тыква досталась <b>{name}</b>: +{got} 🎃\n"
+            "Следующая выкатится, когда в чате снова станет шумно. Все тыквы — в /event",
+            parse_mode="HTML",
+        )
+        bot.answer_callback_query(call.id, f"+{got} 🎃")
+    except Exception as e:
+        log_exception("pumpkin_hunt_claim", e, user_id=uid)
+        bot.answer_callback_query(call.id, "Ошибка охоты")
+
+
 @bot.message_handler(func=lambda m: m.chat and m.chat.type in ("group", "supergroup"))
 def room_track_messages(message):
+    try:
+        _maybe_drop_pumpkin(message)
+    except Exception as e:
+        log_exception("maybe_drop_pumpkin", e)
     try:
         d, rooms = _rooms_get_data()
         code, room = _room_find_by_chat(rooms, message.chat.id)
@@ -10628,10 +11178,16 @@ def room_track_messages(message):
             room_messages[chat_id] = msg_list[-ROOM_MESSAGE_BUFFER:]
         room_participants.setdefault(chat_id, set()).add(message.from_user.id)
         participants = room.get("participants", [])
-        if isinstance(participants, list) and message.from_user.id not in participants:
+        joined = isinstance(participants, list) and message.from_user.id not in participants
+        if joined:
             participants.append(message.from_user.id)
             room["participants"] = participants
-        room["last_activity_at"] = time.time()
+        # Таймер простоя считает минуты: писать всю базу на каждое сообщение
+        # в чате незачем, достаточно раза в минуту или при новом участнике.
+        now_ts = time.time()
+        if not joined and now_ts - float(room.get("last_activity_at") or 0) < 60:
+            return
+        room["last_activity_at"] = now_ts
         rooms["active"][code] = room
         save_data(d)
     except Exception:
@@ -10923,6 +11479,8 @@ def show_main_menu(chat_id, uid):
         types.KeyboardButton(t(uid, "quests")),
         types.KeyboardButton(t(uid, "invite"))
     )
+    if halloween_active():
+        kb.add(types.KeyboardButton(t(uid, "event")))
     
     kb.add(types.KeyboardButton(t(uid, "create_room")))
 
@@ -10975,7 +11533,7 @@ def set_language_callback(call):
 
 @bot.message_handler(func=lambda m: any(text_matches_key(m.text, key) for key in (
     "games", "profile", "ai", "shop", "achievements",
-    "leaderboard", "support", "settings", "create_room", "quests", "invite"
+    "leaderboard", "support", "settings", "create_room", "quests", "invite", "event"
 )))
 def handle_menu_buttons(message):
     uid = message.from_user.id
@@ -11006,6 +11564,10 @@ def handle_menu_buttons(message):
 
     elif text_matches_key(text, "invite"):
         show_referral(message.chat.id, uid)
+
+    elif text_matches_key(text, "event"):
+        if halloween_active() or ev.is_event_finished(ev.HALLOWEEN):
+            show_halloween(message.chat.id, uid)
     
     elif text_matches_key(text, "support"):
         show_support_menu(message, uid)
@@ -11250,9 +11812,7 @@ def quests_cmd(message):
     uid = message.from_user.id
     if not _guard_user(uid, chat_id=message.chat.id, action="quests"):
         return
-    reset_daily_quests(uid)
-    reset_weekly_quests(uid)
-    reset_seasonal_quests(uid)
+    _reset_quests(uid)
     progress = get_user_quests_progress(uid)
 
     def progress_bar(value, target, width=8):
@@ -11265,10 +11825,11 @@ def quests_cmd(message):
         "daily": "🎯 Дневные квесты",
         "weekly": "📅 Недельные квесты",
         "seasonal": "💎 Сезонные квесты",
+        ev.HALLOWEEN: "🎃 Хеллоуин-квесты (до конца ивента)",
     }
     text = f"{t(uid, 'quests')}:\n\n"
     claimable = []
-    for quest_type in ("daily", "weekly", "seasonal"):
+    for quest_type in _active_quest_buckets():
         quests = QUESTS.get(quest_type, [])
         if not quests:
             continue
@@ -11279,7 +11840,7 @@ def quests_cmd(message):
             done = p >= target
             claimed = q["id"] in progress.get("claimed", [])
             status = "✅ получено" if claimed else ("✅ готово" if done else f"{p}/{target}")
-            reward = ", ".join(f"{v} {k}" for k, v in (q.get("reward") or {}).items())
+            reward = _reward_text(q.get("reward") or {})
             text += f"• {q['title']}: {status}\n{progress_bar(p, target)}\n{q['description']}\nНаграда: {reward}\n\n"
             if done and not claimed:
                 claimable.append((quest_type, q))
@@ -11297,12 +11858,10 @@ def claim_quest(call):
         return
     if call.data == "claim_all":
         uid = call.from_user.id
-        reset_daily_quests(uid)
-        reset_weekly_quests(uid)
-        reset_seasonal_quests(uid)
+        _reset_quests(uid)
         progress = get_user_quests_progress(uid)
         claimed = 0
-        for quest_type in ("daily", "weekly", "seasonal"):
+        for quest_type in _active_quest_buckets():
             for q in QUESTS.get(quest_type, []):
                 p = int(progress.get(quest_type, {}).get(q["id"], 0) or 0)
                 if p >= int(q.get("target", 1) or 1) and q["id"] not in progress.get("claimed", []):

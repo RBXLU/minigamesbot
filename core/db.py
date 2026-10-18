@@ -18,6 +18,7 @@ STATE_TABLE_KEYS = {
     "global_game_stats",
     "rooms",
     "broadcast",
+    "events",
 }
 
 LOGGER = logging.getLogger("telegram_games_bot")
@@ -461,6 +462,24 @@ def save_user(user_id, user_data, previous_json=None, db_path=DEFAULT_DB_PATH):
     return _with_retries(op, "save_user")
 
 
+def read_state_key(key, default=None, db_path=DEFAULT_DB_PATH):
+    def op():
+        with _DB_LOCK:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn, db_path)
+                return conn.execute("SELECT value_json FROM state WHERE key = ?", (key,)).fetchone()
+            finally:
+                conn.close()
+    row = _with_retries(op, "read_state_key")
+    if row is None:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return default
+
+
 def update_state_key(key, mutate, default=None, db_path=DEFAULT_DB_PATH):
     """Читает одно значение из таблицы state, применяет mutate и записывает обратно."""
     if key not in STATE_TABLE_KEYS:
@@ -502,7 +521,7 @@ class _LoadedState(dict):
     копия затирала бы игроков, которых за это время обновили точечно.
     """
 
-    __slots__ = ("loaded_users",)
+    __slots__ = ("loaded_users", "loaded_state")
 
 
 def load_state(db_path=DEFAULT_DB_PATH):
@@ -523,7 +542,9 @@ def _load_state_once(db_path):
                 except Exception:
                     state["users"][str(row["user_id"])] = {}
 
+            state.loaded_state = {}
             for row in conn.execute("SELECT key, value_json FROM state"):
+                state.loaded_state[row["key"]] = row["value_json"]
                 try:
                     state[row["key"]] = json.loads(row["value_json"])
                 except Exception:
@@ -570,10 +591,16 @@ def _save_state_once(data, db_path):
                     row["user_id"]: row["data_json"]
                     for row in conn.execute("SELECT user_id, data_json FROM users")
                 }
-            existing_state = {
-                row["key"]: row["value_json"]
-                for row in conn.execute("SELECT key, value_json FROM state")
-            }
+            # Общие счётчики (статистика игр, цель ивента) растут точечно через
+            # update_state_key; сравнение с моментом загрузки не даёт устаревшей
+            # полной копии их откатить.
+            if isinstance(payload, _LoadedState):
+                existing_state = dict(payload.loaded_state)
+            else:
+                existing_state = {
+                    row["key"]: row["value_json"]
+                    for row in conn.execute("SELECT key, value_json FROM state")
+                }
 
             # IMMEDIATE берёт блокировку записи сразу — иначе два потока могут
             # начать транзакции и один упадёт при апгрейде до записи.

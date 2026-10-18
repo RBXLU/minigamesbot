@@ -1,4 +1,23 @@
-def render_profile_text(uid, user, lang, achievements_count, achievements_total, get_game_title):
+# Рамка обрамляет заголовок профиля, тема меняет маркеры списков: раньше
+# купленное в магазине оформление было видно только как «рамка=gold».
+FRAME_DECOR = {
+    "gold": ("✨", "✨"),
+    "neon": ("⚡", "⚡"),
+    "news": ("📰", "📰"),
+    "web": ("🕸", "🕷"),
+    "anniversary": ("🎂", "🎉"),
+}
+THEME_BULLET = {
+    "dark": "▪️",
+    "cyber": "▸",
+    "news": "◆",
+    "halloween": "🎃",
+    "anniversary": "🎈",
+}
+
+
+def render_profile_text(uid, user, lang, achievements_count, achievements_total, get_game_title,
+                        extra_lines=None, style_line=None):
     total = int(user.get("games_total", 0) or 0)
     coins = int(user.get("coins", 0) or 0)
     gstats = user.get("game_stats", {}) if isinstance(user.get("game_stats", {}), dict) else {}
@@ -69,6 +88,15 @@ def render_profile_text(uid, user, lang, achievements_count, achievements_total,
         history_title = "🕓 Последние матчи:"
         default_game = "Игра"
 
+    left, right = FRAME_DECOR.get(frame_style, ("", ""))
+    if left:
+        lines[0] = f"{left} {lines[0]} {right}"
+    if style_line:
+        lines[-1] = style_line
+    if extra_lines:
+        lines[3:3] = list(extra_lines)
+    bullet = THEME_BULLET.get(theme_style, "•")
+
     if gstats:
         lines.append("")
         lines.append(stats_title)
@@ -77,7 +105,7 @@ def render_profile_text(uid, user, lang, achievements_count, achievements_total,
             played = int((row or {}).get("played", 0) or 0)
             if played <= 0:
                 continue
-            lines.append(f"• {get_game_title(uid, game_key)}: {played}")
+            lines.append(f"{bullet} {get_game_title(uid, game_key)}: {played}")
     else:
         lines.append("")
         lines.append(stats_empty)
@@ -88,7 +116,7 @@ def render_profile_text(uid, user, lang, achievements_count, achievements_total,
         for item in history[-10:][::-1]:
             game_key = str(item.get("game", ""))
             title = get_game_title(uid, game_key) if game_key else default_game
-            lines.append(f"• {title} — {str(item.get('at', ''))}")
+            lines.append(f"{bullet} {title} — {str(item.get('at', ''))}")
 
     return "\n".join(lines)
 
