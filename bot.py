@@ -11669,11 +11669,39 @@ def _remember_display_name(user_id, tg_user):
         save_data(d)
 
 
+# Итог партии в Mini App сообщает сам клиент, а подписанный initData игрок
+# может взять из своего же приложения и слать запросы скриптом. Пока игры не
+# считаются на сервере, ограничиваем, сколько можно так «наиграть».
+WEBAPP_MIN_REPORT_INTERVAL = float(os.getenv("WEBAPP_MIN_REPORT_INTERVAL", "3"))
+WEBAPP_DAILY_REPORTS = int(os.getenv("WEBAPP_DAILY_REPORTS", "150"))
+WEBAPP_DAILY_BET_PROFIT = int(os.getenv("WEBAPP_DAILY_BET_PROFIT", "200"))
+_webapp_last_report = {}
+
+
+def _webapp_report_allowed(user_id):
+    now = time.time()
+    if now - _webapp_last_report.get(user_id, 0) < WEBAPP_MIN_REPORT_INTERVAL:
+        return False
+    _webapp_last_report[user_id] = now
+    today = date.today().isoformat()
+    with user_record(user_id) as rec:
+        day = rec.get("webapp_day")
+        if not isinstance(day, dict) or day.get("date") != today:
+            day = rec["webapp_day"] = {"date": today, "reports": 0, "bet_profit": 0}
+        if int(day.get("reports", 0)) >= WEBAPP_DAILY_REPORTS:
+            return False
+        day["reports"] = int(day.get("reports", 0)) + 1
+    return True
+
+
 def _webapp_apply_result(user_id, tg_user, payload):
     """Записывает партию из Mini App теми же функциями, что и чат-версия."""
     game_key = str(payload.get("game") or "").strip()
     if game_key not in WEBAPP_GAME_KEYS:
         raise ValueError("unknown game")
+    if not _webapp_report_allowed(user_id):
+        # Профиль всё равно отдаём: клиент обновит баланс и не сломается.
+        return _webapp_profile(user_id, tg_user)
 
     display_name = (tg_user or {}).get("first_name") or str(user_id)
     session_id = str(payload.get("session") or short_id())[:64]
@@ -11703,13 +11731,26 @@ def _webapp_apply_result(user_id, tg_user, payload):
 
 
 def _webapp_settle_bet(user_id, bet, result):
+    """Ставка играет, только если она есть на балансе; чистый выигрыш за день ограничен."""
     if result == "draws":
         return
-    d = load_data()
-    rec = _ensure_profile_fields(d.setdefault("users", {}).setdefault(str(user_id), {}))
-    coins = int(rec.get("coins", 0) or 0)
-    rec["coins"] = coins + bet if result == "wins" else max(0, coins - bet)
-    save_data(d)
+    today = date.today().isoformat()
+    with user_record(user_id) as rec:
+        _ensure_profile_fields(rec)
+        coins = int(rec.get("coins", 0) or 0)
+        if coins < bet:
+            return
+        day = rec.get("webapp_day")
+        if not isinstance(day, dict) or day.get("date") != today:
+            day = rec["webapp_day"] = {"date": today, "reports": 0, "bet_profit": 0}
+        profit = int(day.get("bet_profit", 0))
+        if result == "wins":
+            gain = max(0, min(bet, WEBAPP_DAILY_BET_PROFIT - profit))
+            rec["coins"] = coins + gain
+            day["bet_profit"] = profit + gain
+        else:
+            rec["coins"] = coins - bet
+            day["bet_profit"] = profit - bet
 
 
 webapp_server = create_webapp(
