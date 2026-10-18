@@ -432,40 +432,78 @@ GAME_DESCRIPTIONS_LANG = {
     },
 }
 
-WHATS_NEW_VERSION = "1.1.0"
-
-WHATS_NEW_ITEMS = {
-    "ru": [
-        "✅ Исправлено большинство найденных ошибок в играх: партии снова засчитываются, игры больше не ломаются.",
-        "🎮 Обновлены игры: переделан сапёр (флажки, цифры на кнопках), в крестиках-ноликах подсвечивается "
-        "выигрышная линия, словесная дуэль заработала полностью, у многих игр появился реванш.",
-        "👥 Реферальная система. Возьмите свою ссылку в меню «🤝 Пригласить друга» или командой /ref и отправьте другу.\n"
-        "  – Друг, который ещё ни разу не запускал бота, сразу получает 50 монет.\n"
-        "  – Когда друг сыграет 3 партии в 2 разных дня, вы получаете 100 монет.\n"
-        "  – Бонусы: за 5 друзей +500, за 10 — +1000, за 20 — +3000 монет (сверх обычных 100 за каждого).\n"
-        "  – В день засчитывается до 10 друзей, остальные — на следующий день.",
-    ],
-    "en": [
-        "✅ Fixed most of the bugs found in games: matches are counted again and games no longer break.",
-        "🎮 Games updated: minesweeper reworked (flags, numbers on buttons), tic-tac-toe highlights "
-        "the winning line, the word duel is fully playable, and many games got a rematch.",
-        "👥 Referral system. Get your link from «🤝 Invite a friend» or with /ref and send it to a friend.\n"
-        "  – A friend who has never started the bot gets 50 coins right away.\n"
-        "  – Once your friend plays 3 games on 2 different days, you get 100 coins.\n"
-        "  – Bonuses: 5 friends +500, 10 — +1000, 20 — +3000 coins (on top of the usual 100 each).\n"
-        "  – Up to 10 friends count per day, the rest carry over to the next day.",
-    ],
-    "uk": [
-        "✅ Виправлено більшість знайдених помилок в іграх: партії знову зараховуються, ігри більше не ламаються.",
-        "🎮 Оновлено ігри: перероблено сапер (прапорці, цифри на кнопках), у хрестиках-нуликах підсвічується "
-        "виграшна лінія, словесна дуель запрацювала повністю, у багатьох ігор з'явився реванш.",
-        "👥 Реферальна система. Візьміть своє посилання в меню «🤝 Запросити друга» або командою /ref і надішліть другу.\n"
-        "  – Друг, який ще жодного разу не запускав бота, одразу отримує 50 монет.\n"
-        "  – Коли друг зіграє 3 партії у 2 різні дні, ви отримуєте 100 монет.\n"
-        "  – Бонуси: за 5 друзів +500, за 10 — +1000, за 20 — +3000 монет (понад звичайні 100 за кожного).\n"
-        "  – На день зараховується до 10 друзів, решта — наступного дня.",
-    ],
+# Релиз-ноты зависят от даты: годовщина — сюрприз, до 13 ноября кнопка 🆕
+# показывает хеллоуинское обновление, с дня рождения — 2.0.
+WHATS_NEW_RELEASES = {
+    "1.2.0": {
+        "ru": [
+            "🎃 «Ночь тыкв» с 25 октября по 2 ноября: собирайте тыквы в играх и на охоте в группах, "
+            "тратьте их в хеллоуин-лавке. Всё — в /event.",
+            "👥 Общая цель: соберём вместе 30 000 тыкв — награду получит каждый участник.",
+            "🪦 На время ивента сапёр превращается в «Кладбище», в виселице — жуткие слова, "
+            "в крестиках-ноликах 🎃 против 👻.",
+            "🏆 Топ тыкв: первые 10 получат титул «Король тыкв 2026» — его не купить.",
+            "🎨 Рамки и темы из магазина теперь видно в профиле.",
+            "⚡ Бот стал заметно быстрее и больше не падает под нагрузкой.",
+        ],
+        "en": [
+            "🎃 Pumpkin Night, Oct 25 – Nov 2: collect pumpkins in games and on hunts in group chats, "
+            "spend them in the Halloween shop. Everything is in /event.",
+            "👥 Community goal: let's collect 30,000 pumpkins together — every participant gets a reward.",
+            "🪦 During the event Minesweeper becomes the Graveyard, Hangman gets spooky words "
+            "and tic-tac-toe is 🎃 vs 👻.",
+            "🏆 Pumpkin leaderboard: the top 10 get the King of Pumpkins 2026 title — it can't be bought.",
+            "🎨 Frames and themes from the shop are now visible in your profile.",
+            "⚡ The bot is noticeably faster and no longer crashes under load.",
+        ],
+        "uk": [
+            "🎃 «Ніч гарбузів» з 25 жовтня по 2 листопада: збирайте гарбузи в іграх і на полюванні в групах, "
+            "витрачайте їх у хелловін-крамниці. Усе — в /event.",
+            "👥 Спільна мета: зберемо разом 30 000 гарбузів — нагороду отримає кожен учасник.",
+            "🪦 На час івенту сапер стає «Цвинтарем», у шибениці — моторошні слова, "
+            "у хрестиках-нуликах 🎃 проти 👻.",
+            "🏆 Топ гарбузів: перші 10 отримають титул «Король гарбузів 2026» — його не купити.",
+            "🎨 Рамки й теми з крамниці тепер видно в профілі.",
+            "⚡ Бот став помітно швидшим і більше не падає під навантаженням.",
+        ],
+    },
+    "2.0.0": {
+        "ru": [
+            "🎂 Нам 1 год! До 19 ноября заберите подарок — 300 монет и рамку «1 год»: кнопка в главном меню или /gift.",
+            "🗓 «Мой год в MiniGames» — личная карточка: партии, победы, любимая игра и место среди игроков. "
+            "Перешлите её друзьям! /year",
+            "⭐ Сезонный пропуск: 20 уровней наград за игру — торт, праздничная тема, корона "
+            "и титул «Ветеран 1-го сезона». /pass",
+            "🏠 Новое главное меню: прогресс, события и всё важное в одной карточке.",
+            "🎃 Спасибо всем охотникам «Ночи тыкв» — итоговый топ в /event.",
+        ],
+        "en": [
+            "🎂 We're 1 year old! Until Nov 19 claim your gift — 300 coins and the “1 year” frame: "
+            "button in the main menu or /gift.",
+            "🗓 “My year in MiniGames” — your personal card: games, wins, favourite game and rank. "
+            "Share it with friends! /year",
+            "⭐ Season pass: 20 reward levels for playing — cake, party theme, crown "
+            "and the Season 1 Veteran title. /pass",
+            "🏠 New main menu: progress, events and everything important in one card.",
+            "🎃 Thanks to every Pumpkin Night hunter — final leaderboard in /event.",
+        ],
+        "uk": [
+            "🎂 Нам 1 рік! До 19 листопада заберіть подарунок — 300 монет і рамку «1 рік»: "
+            "кнопка в головному меню або /gift.",
+            "🗓 «Мій рік у MiniGames» — особиста картка: партії, перемоги, улюблена гра й місце серед гравців. "
+            "Перешліть її друзям! /year",
+            "⭐ Сезонний пропуск: 20 рівнів нагород за гру — торт, святкова тема, корона "
+            "і титул «Ветеран 1-го сезону». /pass",
+            "🏠 Нове головне меню: прогрес, події та все важливе в одній картці.",
+            "🎃 Дякуємо всім мисливцям «Ночі гарбузів» — підсумковий топ в /event.",
+        ],
+    },
 }
+
+
+def _current_release():
+    version = "2.0.0" if ev.is_event_active(ev.ANNIVERSARY) or ev.is_event_finished(ev.ANNIVERSARY) else "1.2.0"
+    return version, WHATS_NEW_RELEASES[version]
 
 # Каждый localized_text() читал состояние целиком, а инлайн-ответ переводит десятки
 # строк — на один запрос набегали секунды до обращения к Telegram.
@@ -1550,6 +1588,7 @@ def _record_game_play(user_id, game_key, display_name=None, session_id=None):
     _update_matching_quests(user_id, "count_games_seasonal", game_key=game_key)
     _check_achievements(user_id)
     award_pumpkins(user_id, ev.pumpkins_per_play(), "game")
+    award_season_xp(user_id, ev.season_xp_per_play(), "game")
     if rec.get("ref_status") == "waiting":
         _referral_track_play(user_id)
     if rec.get("ref_pending"):
@@ -1591,6 +1630,7 @@ def _record_game_result(user_id, game_key, result, extra=None):
         _update_matching_quests(user_id, "count_wins", game_key=game_key)
         _update_matching_quests(user_id, "win_specific_game", game_key=game_key)
         award_pumpkins(user_id, ev.pumpkins_per_win(), "game")
+        award_season_xp(user_id, ev.season_xp_per_win(), "game")
     _check_achievements(user_id)
 
 
@@ -1613,6 +1653,11 @@ EVENT_SHOP_ITEMS = {
 # Не продаются: выдаются за общую цель ивента и за годовщину.
 REWARD_ITEMS = {
     "avatar_full_moon": {"name": "Аватар: Полная луна", "type": "avatar", "value": "🌕", "price": 0},
+    "frame_anniversary": {"name": "Рамка: 1 год", "type": "frame", "value": "anniversary", "price": 0},
+    "avatar_cake": {"name": "Аватар: Торт", "type": "avatar", "value": "🎂", "price": 0},
+    "theme_anniversary": {"name": "Тема: Праздник", "type": "theme", "value": "anniversary", "price": 0},
+    "victory_party": {"name": "Эффект победы: Праздник", "type": "victory", "value": "🥳", "price": 0},
+    "avatar_crown": {"name": "Аватар: Корона", "type": "avatar", "value": "👑", "price": 0},
 }
 
 
@@ -1920,6 +1965,230 @@ def _hw_claim(call, uid):
     else:
         bot.answer_callback_query(call.id, "Новых наград пока нет")
     safe_edit_message(call, _hw_text(uid), reply_markup=_hw_kb(uid), parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# Годовщина бота: подарок, карточка «Мой год», сезонный пропуск
+# ---------------------------------------------------------------------------
+YEAR_CARD_COOLDOWN = 60
+_year_card_last = {}
+_ranking_cache = {"at": 0.0, "rows": []}
+
+
+def anniversary_active():
+    return ev.is_event_active(ev.ANNIVERSARY)
+
+
+def anniversary_started():
+    """Карточка года доступна с дня рождения и дальше."""
+    return anniversary_active() or ev.is_event_finished(ev.ANNIVERSARY)
+
+
+def season_active():
+    return ev.is_event_active(ev.SEASON)
+
+
+def _season_bucket(rec):
+    seasons = rec.get("season")
+    if not isinstance(seasons, dict):
+        seasons = rec["season"] = {}
+    bucket = seasons.get(ev.SEASON_ID)
+    if not isinstance(bucket, dict):
+        bucket = seasons[ev.SEASON_ID] = ev.new_season_bucket()
+    for key, value in ev.new_season_bucket().items():
+        bucket.setdefault(key, value)
+    return bucket
+
+
+def award_season_xp(uid, amount, source):
+    if amount <= 0 or not season_active():
+        return 0
+    with user_record(uid) as rec:
+        return ev.add_season_xp(_season_bucket(rec), amount, source)
+
+
+def _grant_reward(rec, reward):
+    """Монеты, предмет и титул из награды — в запись игрока."""
+    if reward.get("coins"):
+        rec["coins"] = int(rec.get("coins", 0) or 0) + int(reward["coins"])
+    if reward.get("item"):
+        inv = rec.setdefault("inventory", [])
+        if reward["item"] not in inv:
+            inv.append(reward["item"])
+    if reward.get("title"):
+        titles = rec.get("titles")
+        if not isinstance(titles, list):
+            titles = rec["titles"] = []
+        if reward["title"] not in titles:
+            titles.append(reward["title"])
+
+
+def _season_text(uid):
+    bucket = _season_bucket(load_user_record(uid))
+    level, into, per = ev.season_progress(bucket["xp"])
+    _, end = ev.event_window(ev.SEASON)
+    lines = [
+        "⭐ <b>Сезонный пропуск · Сезон 1</b>",
+        f"Бесплатный для всех, до {end:%d.%m.%Y}",
+        "",
+        f"Уровень <b>{level}</b> из {ev.SEASON_MAX_LEVEL}",
+    ]
+    if level < ev.SEASON_MAX_LEVEL:
+        lines.append(f"{ev.progress_bar(into, per)} {into}/{per} XP до следующего")
+    else:
+        lines.append("Пропуск пройден полностью — вы легенда сезона!")
+    lines += [
+        "",
+        f"XP: партия +{ev.season_xp_per_play()}, победа +{ev.season_xp_per_win()}, а ещё XP за квесты",
+        "",
+        "<b>Награды</b>",
+    ]
+    claimed = set(bucket.get("claimed", []))
+    shown = sorted(set(range(max(1, level - 1), min(ev.SEASON_MAX_LEVEL, level + 4) + 1)) | set(ev.SEASON_REWARDS))
+    for lvl in shown:
+        mark = "✅" if lvl in claimed else ("🎁" if lvl <= level else "🔒")
+        star = " ⭐" if lvl in ev.SEASON_REWARDS else ""
+        reward = ev.season_reward(lvl)
+        text = _reward_text(reward) + (f", титул «{reward['title']}»" if reward.get("title") else "")
+        lines.append(f"{mark} {lvl}{star} — {text}")
+    return "\n".join(lines)
+
+
+def _season_kb(uid):
+    kb = types.InlineKeyboardMarkup()
+    ready = ev.claimable_levels(_season_bucket(load_user_record(uid)))
+    if ready:
+        kb.add(types.InlineKeyboardButton(f"🎁 Забрать награды ({len(ready)})", callback_data="hub_pass_claim"))
+    kb.add(types.InlineKeyboardButton("🏠 В меню", callback_data="hub_refresh"))
+    return kb
+
+
+def _season_claim(uid):
+    granted = []
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        bucket = _season_bucket(rec)
+        for lvl in ev.claimable_levels(bucket):
+            reward = ev.season_reward(lvl)
+            _grant_reward(rec, reward)
+            bucket["claimed"].append(lvl)
+            granted.append(lvl)
+    return granted
+
+
+def _birthday_gift_claimed(rec):
+    return rec.get("birthday_gift") == ev.event_window(ev.ANNIVERSARY)[0].year
+
+
+def _claim_birthday_gift(uid):
+    """True, если подарок выдан сейчас; False — уже забран или праздник не идёт."""
+    if not anniversary_active():
+        return False
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        if _birthday_gift_claimed(rec):
+            return False
+        _grant_reward(rec, ev.BIRTHDAY_GIFT)
+        item = _shop_item(ev.BIRTHDAY_GIFT["item"])
+        _apply_cosmetic(rec, ev.BIRTHDAY_GIFT["item"], item)
+        rec["birthday_gift"] = ev.event_window(ev.ANNIVERSARY)[0].year
+    return True
+
+
+def _games_ranking():
+    """Места по числу партий; кэш на 10 минут — полный проход по базе дорогой."""
+    now = time.time()
+    if now - _ranking_cache["at"] > 600:
+        rows = []
+        for uid_str, rec in load_data().get("users", {}).items():
+            if isinstance(rec, dict):
+                rows.append((int(rec.get("games_total", 0) or 0), uid_str))
+        rows.sort(key=lambda row: (-row[0], row[1]))
+        _ranking_cache.update(at=now, rows=rows)
+    return _ranking_cache["rows"]
+
+
+def _year_stats(uid):
+    rec = _ensure_profile_fields(load_user_record(uid))
+    gstats = _game_stats(rec)
+    wins = sum(int((row or {}).get("wins", 0) or 0) for row in gstats.values())
+    losses = sum(int((row or {}).get("losses", 0) or 0) for row in gstats.values())
+    fav_key, fav_count = max(
+        ((key, int((row or {}).get("played", 0) or 0)) for key, row in gstats.items()),
+        key=lambda item: item[1],
+        default=(None, 0),
+    )
+    rows = _games_ranking()
+    rank = next((i for i, (_, u) in enumerate(rows, 1) if u == str(uid)), len(rows) + 1)
+    start, _ = ev.event_window(ev.ANNIVERSARY)
+    return {
+        "name": rec.get("display_name") or f"user_{uid}",
+        "games": int(rec.get("games_total", 0) or 0),
+        "wins": wins,
+        "winrate": (wins * 100.0 / (wins + losses)) if wins + losses else 0.0,
+        "favorite": get_game_title(uid, fav_key) if fav_key else "—",
+        "favorite_count": fav_count,
+        "best_streak": int(rec.get("streak_best", 0) or 0),
+        "achievements": sum(1 for key in rec.get("achievements", {}) if key in ACHIEVEMENTS),
+        "achievements_total": len(ACHIEVEMENTS),
+        "rank": rank,
+        "players": max(len(rows), rank),
+        "footer": f"@{INLINE_BOT_USERNAME} · нам 1 год · {start:%d.%m.%Y}",
+    }
+
+
+def send_year_card(chat_id, uid):
+    now = time.time()
+    if now - _year_card_last.get(uid, 0) < YEAR_CARD_COOLDOWN:
+        bot.send_message(chat_id, "🗓 Карточка только что создана — она чуть выше.")
+        return
+    _year_card_last[uid] = now
+    from ui.year_card import render_year_card
+
+    from io import BytesIO
+
+    png = BytesIO(render_year_card(_year_stats(uid), seed=int(uid)))
+    png.name = "my_year_minigames.png"
+    caption = (
+        "🎂 Ваш год в MiniGames!\n"
+        "Перешлите карточку друзьям — пусть попробуют обогнать:\n"
+        f"{_referral_link(uid)}"
+    )
+    bot.send_photo(chat_id, png, caption=caption)
+
+
+@bot.message_handler(commands=["year", "pass", "gift"])
+def anniversary_cmd(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="anniversary"):
+        return
+    command = (message.text or "").split()[0].lstrip("/").split("@")[0]
+    start, _ = ev.event_window(ev.ANNIVERSARY)
+    if command == "year":
+        if anniversary_started():
+            send_year_card(message.chat.id, uid)
+        else:
+            bot.send_message(message.chat.id, f"🗓 Карточка года откроется {start:%d.%m} — в день рождения бота.")
+    elif command == "pass":
+        if season_active() or ev.is_event_finished(ev.SEASON):
+            bot.send_message(message.chat.id, _season_text(uid), parse_mode="HTML", reply_markup=_season_kb(uid))
+        else:
+            bot.send_message(message.chat.id, f"⭐ Сезонный пропуск стартует {start:%d.%m}.")
+    elif command == "gift":
+        if _claim_birthday_gift(uid):
+            bot.send_message(message.chat.id, _gift_text())
+        elif anniversary_active():
+            bot.send_message(message.chat.id, "🎁 Подарок уже у вас — загляните в профиль.")
+        else:
+            bot.send_message(message.chat.id, f"🎂 Подарки будут {start:%d.%m}–{ev.event_window(ev.ANNIVERSARY)[1]:%d.%m}.")
+
+
+def _gift_text():
+    return (
+        "🎂 Боту исполнился год — спасибо, что играете с нами!\n\n"
+        f"🎁 Ваш подарок: {_reward_text(ev.BIRTHDAY_GIFT)}.\n"
+        "Рамку «1 год» мы уже надели — посмотрите в профиле."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2455,15 +2724,16 @@ def _render_help_text(uid):
 
 
 def _render_whats_new_text(uid):
+    version, notes = _current_release()
     header = localized_text(
         uid,
-        f"🔄 Обновление {WHATS_NEW_VERSION}\n(Stable ветка)!",
-        f"🔄 Update {WHATS_NEW_VERSION}\n(Stable branch)!",
-        f"🔄 Оновлення {WHATS_NEW_VERSION}\n(Stable гілка)!",
+        f"🔄 Обновление {version}\n(Stable ветка)!",
+        f"🔄 Update {version}\n(Stable branch)!",
+        f"🔄 Оновлення {version}\n(Stable гілка)!",
     )
     title = localized_text(uid, "Что нового:", "What's new:", "Що нового:")
     footer = localized_text(uid, "🎮 Ник бота", "🎮 Bot username", "🎮 Нік бота") + f" — @{INLINE_BOT_USERNAME}"
-    items = WHATS_NEW_ITEMS.get(get_user_language(uid), WHATS_NEW_ITEMS["ru"])
+    items = notes.get(get_user_language(uid), notes["ru"])
     return "\n".join([header, "", title] + [f"• {item}" for item in items] + ["", footer])
 
 
@@ -2954,6 +3224,7 @@ def claim_quest_reward(user_id, quest_type, quest_id):
         progress["claimed"].append(quest_id)
     if pumpkins:
         _hw_bump_total(pumpkins)
+    award_season_xp(user_id, quest["reward"].get("xp", 0), "quest")
     return True
 
 def _pong_record_results(state, gid):
@@ -11569,27 +11840,130 @@ def show_main_menu(chat_id, uid):
         types.KeyboardButton(t(uid, "settings"))
     )
 
-    inline_kb = types.InlineKeyboardMarkup(row_width=2)
+    bot.send_message(chat_id, t(uid, "main_menu"), reply_markup=kb)
+    bot.send_message(chat_id, _hub_text(uid), parse_mode="HTML", reply_markup=_hub_kb(uid))
+
+
+# Карточка-хаб главного меню: профиль, прогресс, текущее событие и кнопки
+# ко всему новому. Клавиатура внизу остаётся — к ней привыкли.
+def _hub_text(uid):
+    user, unlocked = _load_profile(uid)
+    name = html.escape(str(user.get("display_name") or f"user_{uid}"))
+    frame = {
+        "gold": ("✨", "✨"), "neon": ("⚡", "⚡"), "news": ("📰", "📰"),
+        "web": ("🕸", "🕷"), "anniversary": ("🎂", "🎉"),
+    }.get(user.get("frame_style"), ("", ""))
+    head = f"{user.get('avatar_emoji', '🙂')} <b>{name}</b>"
+    if frame[0]:
+        head = f"{frame[0]} {head} {frame[1]}"
+    lines = []
+    if anniversary_active():
+        lines += [localized_text(uid, "🎂 <b>MiniGames — нам 1 год!</b>", "🎂 <b>MiniGames turns 1!</b>",
+                                 "🎂 <b>MiniGames — нам 1 рік!</b>"), ""]
+    elif halloween_active():
+        lines += [localized_text(uid, "🎃 <b>Идёт «Ночь тыкв»</b>", "🎃 <b>Pumpkin Night is on</b>",
+                                 "🎃 <b>Триває «Ніч гарбузів»</b>"), ""]
+    lines.append(head)
+    titles = user.get("titles") if isinstance(user.get("titles"), list) else []
+    if titles:
+        lines.append("🏷 " + " · ".join(titles))
+    if season_active():
+        level, into, per = ev.season_progress(_season_bucket(user)["xp"])
+        lines.append(localized_text(uid, "⭐ Сезон 1 · уровень", "⭐ Season 1 · level", "⭐ Сезон 1 · рівень")
+                     + f" {level} {ev.progress_bar(into, per, 8)}")
+    coins = int(user.get("coins", 0) or 0)
+    streak = int(user.get("streak_current", 0) or 0)
+    lines.append(f"🪙 {_fmt_num(coins)}   🔥 {streak}   🏆 {len(unlocked)}/{len(ACHIEVEMENTS)}")
+    if halloween_active():
+        bucket = (user.get("events") or {}).get(ev.HALLOWEEN) or {}
+        lines.append(f"🎃 {int(bucket.get('pumpkins', 0) or 0)}")
+    done, total = _quest_completion_summary(uid)
+    lines.append(localized_text(uid, "🎯 Квесты", "🎯 Quests", "🎯 Квести") + f": {done}/{total}")
+    last = str(user.get("last_game") or "")
+    if last:
+        lines.append(localized_text(uid, "🕹 Последняя игра", "🕹 Last game", "🕹 Остання гра")
+                     + f": {get_game_title(uid, last)}")
+    return "\n".join(lines)
+
+
+def _hub_kb(uid):
+    kb = types.InlineKeyboardMarkup(row_width=2)
     webapp_button = _webapp_inline_button(uid)
     if webapp_button:
-        inline_kb.add(webapp_button)
-    inline_kb.add(
-        types.InlineKeyboardButton("📖 /help", callback_data="menu_help"),
-        types.InlineKeyboardButton("🆕", callback_data="menu_whats_new")
-    )
+        kb.add(webapp_button)
     if _last_game_instruction(uid):
-        inline_kb.add(types.InlineKeyboardButton("▶️", callback_data="menu_continue"))
+        kb.add(types.InlineKeyboardButton(
+            localized_text(uid, "▶️ Продолжить", "▶️ Continue", "▶️ Продовжити"), callback_data="menu_continue"))
+    if anniversary_active() and not _birthday_gift_claimed(load_user_record(uid)):
+        kb.add(types.InlineKeyboardButton(
+            localized_text(uid, "🎁 Подарок на день рождения", "🎁 Birthday gift", "🎁 Подарунок на день народження"),
+            callback_data="hub_gift"))
+    if halloween_active():
+        kb.add(types.InlineKeyboardButton(t(uid, "event"), callback_data="hub_event"))
+    row = []
+    if anniversary_started():
+        row.append(types.InlineKeyboardButton(
+            localized_text(uid, "🗓 Мой год", "🗓 My year", "🗓 Мій рік"), callback_data="hub_year"))
+    if season_active():
+        row.append(types.InlineKeyboardButton(
+            localized_text(uid, "⭐ Пропуск", "⭐ Pass", "⭐ Пропуск"), callback_data="hub_pass"))
+    if row:
+        kb.row(*row)
+    kb.row(
+        types.InlineKeyboardButton(t(uid, "quests"), callback_data="hub_quests"),
+        types.InlineKeyboardButton(t(uid, "invite"), callback_data="hub_invite"),
+    )
+    kb.row(
+        types.InlineKeyboardButton("📖 /help", callback_data="menu_help"),
+        types.InlineKeyboardButton("🆕", callback_data="menu_whats_new"),
+        types.InlineKeyboardButton("🔄", callback_data="hub_refresh"),
+    )
+    return kb
 
-    bot.send_message(
-        chat_id,
-        f"{t(uid, 'main_menu')}\n\n{t(uid, 'choose_option')}\n\n{_render_main_menu_status(uid)}",
-        reply_markup=kb
-    )
-    bot.send_message(
-        chat_id,
-        localized_text(uid, "Быстрые действия:", "Quick actions:", "Швидкі дії:"),
-        reply_markup=inline_kb
-    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("hub_"))
+def hub_callbacks(call):
+    uid = call.from_user.id
+    chat_id = call.message.chat.id if call.message else uid
+    try:
+        data = call.data
+        if data == "hub_refresh":
+            safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid), parse_mode="HTML")
+            bot.answer_callback_query(call.id)
+        elif data == "hub_gift":
+            if _claim_birthday_gift(uid):
+                bot.answer_callback_query(call.id, "🎁 Подарок получен!")
+                bot.send_message(chat_id, _gift_text())
+            else:
+                bot.answer_callback_query(call.id, "Подарок уже у вас")
+            safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid), parse_mode="HTML")
+        elif data == "hub_event":
+            bot.answer_callback_query(call.id)
+            show_halloween(chat_id, uid)
+        elif data == "hub_year":
+            bot.answer_callback_query(call.id, "🗓 Рисуем вашу карточку…")
+            send_year_card(chat_id, uid)
+        elif data == "hub_pass":
+            bot.answer_callback_query(call.id)
+            bot.send_message(chat_id, _season_text(uid), parse_mode="HTML", reply_markup=_season_kb(uid))
+        elif data == "hub_pass_claim":
+            granted = _season_claim(uid)
+            note = f"🎁 Награды за уровни: {', '.join(map(str, granted))}" if granted else "Новых наград пока нет"
+            bot.answer_callback_query(call.id, note, show_alert=bool(granted))
+            safe_edit_message(call, _season_text(uid), reply_markup=_season_kb(uid), parse_mode="HTML")
+        elif data == "hub_quests":
+            bot.answer_callback_query(call.id)
+            from types import SimpleNamespace
+
+            quests_cmd(SimpleNamespace(from_user=call.from_user, chat=SimpleNamespace(id=chat_id)))
+        elif data == "hub_invite":
+            bot.answer_callback_query(call.id)
+            show_referral(chat_id, uid)
+        else:
+            bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("hub_callbacks", e, user_id=uid)
+        bot.answer_callback_query(call.id, "Ошибка меню")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("set_lang_"))
 def set_language_callback(call):
