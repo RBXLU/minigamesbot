@@ -11649,12 +11649,26 @@ def _group_menu_text():
     )
 
 
+class _InlineMenuButton(types.InlineKeyboardButton):
+    """Кнопка «открыть инлайн-меню бота в этом чате».
+
+    Пустой switch_inline_query_current_chat Telegram принимает, а telebot при
+    сериализации его выбрасывает — кнопка становилась текстовой, и Telegram
+    отклонял всё сообщение: «Text buttons are not allowed in the inline keyboard».
+    """
+
+    def to_dict(self):
+        data = super().to_dict()
+        data["switch_inline_query_current_chat"] = self.switch_inline_query_current_chat or ""
+        return data
+
+
 def _group_menu_kb():
     kb = types.InlineKeyboardMarkup()
     buttons = [types.InlineKeyboardButton(title, callback_data=f"grp_play_{key}") for key, title in ROOM_VOTE_GAMES]
     for i in range(0, len(buttons), 2):
         kb.row(*buttons[i:i + 2])
-    kb.add(types.InlineKeyboardButton("🎯 Все игры через @-меню", switch_inline_query_current_chat=""))
+    kb.add(_InlineMenuButton("🎯 Все игры через @-меню", switch_inline_query_current_chat=""))
     kb.add(types.InlineKeyboardButton("🏆 Топ чата", callback_data="grp_top"))
     return kb
 
@@ -11686,23 +11700,29 @@ def _send_group_menu(chat_id):
 @bot.message_handler(commands=["games", "play"])
 def games_cmd(message):
     uid = message.from_user.id
-    if not _guard_user(uid, chat_id=message.chat.id, action="games", require_subscription=False):
-        return
-    if message.chat.type in ("group", "supergroup"):
-        _send_group_menu(message.chat.id)
-    else:
-        show_games_menu(message.chat.id, uid)
+    try:
+        if not _guard_user(uid, chat_id=message.chat.id, action="games", require_subscription=False):
+            return
+        if message.chat.type in ("group", "supergroup"):
+            _send_group_menu(message.chat.id)
+        else:
+            show_games_menu(message.chat.id, uid)
+    except Exception as e:
+        log_exception("games_cmd", e, user_id=uid)
 
 
 @bot.message_handler(commands=["top"])
 def top_cmd(message):
     uid = message.from_user.id
-    if not _guard_user(uid, chat_id=message.chat.id, action="top", require_subscription=False):
-        return
-    if message.chat.type in ("group", "supergroup"):
-        bot.send_message(message.chat.id, _group_top_text(message.chat.id), parse_mode="HTML")
-    else:
-        bot.send_message(message.chat.id, _render_leaderboard_text(uid))
+    try:
+        if not _guard_user(uid, chat_id=message.chat.id, action="top", require_subscription=False):
+            return
+        if message.chat.type in ("group", "supergroup"):
+            bot.send_message(message.chat.id, _group_top_text(message.chat.id), parse_mode="HTML")
+        else:
+            bot.send_message(message.chat.id, _render_leaderboard_text(uid))
+    except Exception as e:
+        log_exception("top_cmd", e, user_id=uid)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grp_"))
