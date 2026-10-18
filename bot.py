@@ -5703,7 +5703,7 @@ def _run_broadcast(admin_id, text, markup_factory, check_subscription=True):
         targets = _broadcast_targets()
         stats = {"sent": 0, "blocked": 0, "failed": 0, "skipped": 0}
         delay = 1.0 / max(BROADCAST_RATE, 1.0)
-        bot.send_message(admin_id, f"📣 Рассылка началась: {len(targets)} получателей.")
+        _broadcast_report(admin_id, f"📣 Рассылка началась: {len(targets)} получателей.")
         for index, dest in enumerate(targets, 1):
             if check_subscription and REQUIRED_CHANNEL and not is_user_subscribed(dest):
                 stats["skipped"] += 1
@@ -5717,9 +5717,9 @@ def _run_broadcast(admin_id, text, markup_factory, check_subscription=True):
                 except Exception as e:
                     log_exception("broadcast_mark_blocked", e)
             if index % 200 == 0:
-                bot.send_message(admin_id, f"📣 {index}/{len(targets)}: доставлено {stats['sent']}")
+                _broadcast_report(admin_id, f"📣 {index}/{len(targets)}: доставлено {stats['sent']}")
             time.sleep(delay)
-        bot.send_message(
+        _broadcast_report(
             admin_id,
             "✅ Рассылка завершена.\n"
             f"Доставлено: {stats['sent']}\n"
@@ -5732,6 +5732,128 @@ def _run_broadcast(admin_id, text, markup_factory, check_subscription=True):
         log_exception("run_broadcast", e)
     finally:
         _broadcast_lock.release()
+
+
+def _broadcast_report(admin_id, text):
+    """Прогресс рассылки админу; у автоматических анонсов админов может быть несколько."""
+    targets = admin_id if isinstance(admin_id, (list, tuple, set)) else [admin_id]
+    for target in targets:
+        if not target:
+            continue
+        try:
+            bot.send_message(target, text)
+        except Exception as e:
+            log_exception("broadcast_report", e)
+
+
+# ---------------------------------------------------------------------------
+# Автоанонсы событий
+#
+# Раз в 10 минут проверяем, не наступила ли дата события, и один раз шлём
+# всем анонс. Отметка ставится в базе до рассылки: перезапуск бота не
+# разошлёт анонс повторно. EVENT_FORCE анонс не запускает — это режим для
+# проверки, и тысяче человек из-за него писать нельзя.
+# ---------------------------------------------------------------------------
+EVENT_ANNOUNCE_INTERVAL = 600
+EVENT_ANNOUNCEMENTS_ENABLED = os.getenv("EVENT_ANNOUNCEMENTS", "1") == "1"
+
+
+def _announcement(name):
+    """(текст, фабрика клавиатуры) анонса события."""
+    if name == ev.HALLOWEEN:
+        _, end = ev.event_window(ev.HALLOWEEN)
+        text = (
+            "🎃 Началась «Ночь тыкв»!\n\n"
+            f"До {end:%d.%m} включительно:\n"
+            "• тыквы за каждую партию и победу\n"
+            "• охота на тыквы в группах — кто первый нажал, тот и забрал\n"
+            "• хеллоуин-лавка: аватары, рамка «Паутина», тема «Хеллоуин»\n"
+            f"• общая цель — {_fmt_num(ev.halloween_goal())} тыкв на всех, награда каждому участнику\n"
+            "• сапёр-«Кладбище», жуткая виселица и 🎃 против 👻\n\n"
+            "Первые 10 в топе получат титул «Король тыкв 2026»."
+        )
+        label, data = "🎃 Открыть ивент", "hw_open"
+    else:
+        _, end = ev.event_window(ev.ANNIVERSARY)
+        text = (
+            "🎂 Нам 1 год!\n\n"
+            "Спасибо, что играете с нами. В честь дня рождения:\n"
+            f"• подарок до {end:%d.%m} — 300 монет и рамка «1 год»\n"
+            "• «Мой год в MiniGames» — ваша личная карточка: /year\n"
+            "• сезонный пропуск: 20 уровней наград за игру — /pass\n"
+            "• новое главное меню и обновлённый Mini App"
+        )
+        label, data = "🎁 Забрать подарок", "hub_gift"
+
+    def markup():
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(label, callback_data=data))
+        return kb
+    return text, markup
+
+
+def _event_in_real_window(name, today=None):
+    start, end = ev.event_window(name)
+    return start <= (today or date.today()) <= end
+
+
+def _claim_announcement(name):
+    """Атомарно помечает анонс отправленным; True — если отмечаем впервые."""
+    year = ev.event_window(name)[0].year
+    key = f"announced_{year}"
+    claimed = {"now": False}
+
+    def mark(state):
+        state = state if isinstance(state, dict) else {}
+        bucket = state.setdefault(name, {})
+        if not bucket.get(key):
+            bucket[key] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            claimed["now"] = True
+        return state
+    update_state_key("events", mark, default={}, db_path=DB_FILE)
+    return claimed["now"]
+
+
+def _unclaim_announcement(name):
+    key = f"announced_{ev.event_window(name)[0].year}"
+
+    def unmark(state):
+        state = state if isinstance(state, dict) else {}
+        state.setdefault(name, {}).pop(key, None)
+        return state
+    update_state_key("events", unmark, default={}, db_path=DB_FILE)
+
+
+def check_event_announcements(today=None):
+    """Шлёт анонс каждого события, чья дата наступила; возвращает список запущенных."""
+    started = []
+    if not EVENT_ANNOUNCEMENTS_ENABLED:
+        return started
+    for name in (ev.HALLOWEEN, ev.ANNIVERSARY):
+        if not _event_in_real_window(name, today):
+            continue
+        if _broadcast_lock.locked():
+            break                     # идёт другая рассылка — попробуем в следующий раз
+        if not _claim_announcement(name):
+            continue
+        text, markup = _announcement(name)
+        if start_broadcast(sorted(BOT_ADMIN_IDS), text, markup):
+            LOGGER.info("Анонс события %s запущен", name)
+            started.append(name)
+        else:
+            # Рассылку успели занять между проверкой и запуском — повторим позже.
+            _unclaim_announcement(name)
+            LOGGER.warning("Анонс события %s отложен: идёт другая рассылка", name)
+    return started
+
+
+def _event_announcer():
+    while not _shutdown_event.is_set():
+        try:
+            check_event_announcements()
+        except Exception as e:
+            log_exception("event_announcer", e)
+        _shutdown_event.wait(EVENT_ANNOUNCE_INTERVAL)
 
 
 def _broadcast_menu_kb():
@@ -12475,8 +12597,10 @@ def hub_callbacks(call):
             if _claim_birthday_gift(uid):
                 bot.answer_callback_query(call.id, "🎁 Подарок получен!")
                 bot.send_message(chat_id, _gift_text())
-            else:
+            elif anniversary_active():
                 bot.answer_callback_query(call.id, "Подарок уже у вас")
+            else:
+                bot.answer_callback_query(call.id, "Праздник закончился — подарки больше не выдаются", show_alert=True)
             safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid), parse_mode="HTML")
         elif data == "hub_event":
             bot.answer_callback_query(call.id)
@@ -12939,6 +13063,7 @@ if __name__ == "__main__":
     Thread(target=keep_alive, daemon=True).start()
     Thread(target=_rooms_watchdog, daemon=True).start()
     Thread(target=_games_watchdog, daemon=True).start()
+    Thread(target=_event_announcer, daemon=True, name="event-announcer").start()
     _setup_webapp_menu_button()
     if _DB_RECOVERY_NOTE:
         _send_admin_alert(f"⚠️ <b>База данных восстановлена при старте</b>\n{html.escape(_DB_RECOVERY_NOTE)}")
