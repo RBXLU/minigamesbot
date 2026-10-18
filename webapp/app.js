@@ -4,6 +4,8 @@ const tg = window.Telegram && window.Telegram.WebApp;
 const screenEl = document.getElementById('screen');
 const titleEl = document.getElementById('title');
 const coinsEl = document.getElementById('coins');
+const pumpkinsEl = document.getElementById('pumpkins');
+const tabsEl = document.getElementById('tabs');
 const backEl = document.getElementById('back');
 const toastEl = document.getElementById('toast');
 const layoutToggleEl = document.getElementById('layout-toggle');
@@ -12,6 +14,7 @@ let CFG = null;
 let PROFILE = null;
 let currentCleanup = null;
 let currentScreen = null;
+let currentTab = 'games';
 
 /* ---------- режим отображения ---------- */
 
@@ -146,15 +149,34 @@ async function api(path, body) {
     },
     body: JSON.stringify(body || {})
   });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
+  if (!res.ok) {
+    let code = 'HTTP ' + res.status;
+    try { code = (await res.json()).error || code; } catch (e) { /* не JSON */ }
+    throw new Error(ERRORS[code] || code);
+  }
   return res.json();
 }
+
+/** Действия, которые меняют баланс: их выполняет и проверяет сервер. */
+function action(name, body) {
+  return api('/api/action/' + name, body);
+}
+
+const ERRORS = {
+  'not enough coins': 'Не хватает монет',
+  'not enough pumpkins': 'Не хватает тыкв',
+  'unauthorized': 'Откройте приложение через бота',
+  'no active hand': 'Раздача уже закончилась',
+  'not for sale': 'Этот предмет не продаётся',
+  'not owned': 'Сначала купите предмет'
+};
 
 /** Плавно докручивает число монет и подсвечивает прибыль/убыль. */
 function setCoins(profile) {
   if (!profile) return;
   const previous = PROFILE ? PROFILE.coins : null;
   PROFILE = profile;
+  updatePumpkins();
 
   if (previous === null || previous === profile.coins || REDUCED_MOTION) {
     coinsEl.textContent = '🪙 ' + profile.coins;
@@ -177,9 +199,21 @@ function setCoins(profile) {
   requestAnimationFrame(step);
 }
 
+function updatePumpkins() {
+  const hw = PROFILE && PROFILE.events && PROFILE.events.halloween;
+  const show = !!(hw && (hw.active || hw.pumpkins));
+  pumpkinsEl.hidden = !show;
+  if (show) pumpkinsEl.textContent = '🎃 ' + hw.pumpkins;
+}
+
 async function report(payload) {
   try {
-    setCoins(await api('/api/report', payload));
+    const profile = await api('/api/report', payload);
+    setCoins(profile);
+    if (profile.new_record) {
+      haptic('win');
+      toast('🏆 Новый рекорд!', 2200);
+    }
   } catch (e) {
     toast('Не удалось сохранить результат');
   }
@@ -196,6 +230,8 @@ function openScreen(title, showBack, builder) {
   titleEl.textContent = title;
   replay(titleEl, 'slide-in');
   backEl.hidden = !showBack;
+  tabsEl.hidden = showBack;
+  document.body.classList.toggle('with-tabs', !showBack);
   if (tg && tg.BackButton) showBack ? tg.BackButton.show() : tg.BackButton.hide();
   replay(screenEl, 'swap');
   currentCleanup = builder(screenEl) || null;
@@ -244,9 +280,28 @@ function bindArrows(onMove, extra) {
   bindKeys(Object.assign(map, extra || {}));
 }
 
-function goHome() {
-  openScreen('Мини-игры', false, buildHome);
+const TABS = {
+  games: ['Мини-игры', root => buildHome(root)],
+  profile: ['Профиль', root => buildProfile(root)],
+  shop: ['Магазин', root => buildShop(root)],
+  season: ['Сезон', root => buildSeason(root)]
+};
+
+function openTab(name) {
+  currentTab = TABS[name] ? name : 'games';
+  tabsEl.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.tab === currentTab));
+  const [title, builder] = TABS[currentTab];
+  openScreen(title, false, builder);
 }
+
+function goHome() {
+  openTab(currentTab);
+}
+
+tabsEl.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  haptic('tap');
+  openTab(b.dataset.tab);
+}));
 
 backEl.addEventListener('click', goHome);
 
@@ -281,9 +336,12 @@ function buildHome(root) {
   const panel = el('div', 'panel');
 
   const hero = el('div', 'hero');
-  hero.appendChild(el('div', 'avatar', (PROFILE && PROFILE.avatar) || '🙂'));
+  hero.appendChild(avatarNode());
   const who = el('div', 'who');
   who.appendChild(el('div', 'name', (PROFILE && PROFILE.name) || 'Игрок'));
+  if (PROFILE && PROFILE.titles && PROFILE.titles.length) {
+    who.appendChild(el('div', 'titles', PROFILE.titles.join(' · ')));
+  }
   who.appendChild(el('div', 'sub', PROFILE && PROFILE.streak
     ? 'серия ' + PROFILE.streak + ' дн. подряд'
     : 'сыграйте партию, чтобы начать серию'));
@@ -318,6 +376,7 @@ function buildHome(root) {
   }
 
   root.appendChild(panel);
+  buildBanners(root);
 
   const byCategory = {};
   CFG.games.forEach(([key, name, emoji, category]) => {
@@ -335,7 +394,9 @@ function buildHome(root) {
       const label = el('span');
       label.appendChild(document.createTextNode(name));
       const played = PROFILE && PROFILE.game_stats[key] ? PROFILE.game_stats[key].played : 0;
-      if (played) label.appendChild(el('span', 'played', 'сыграно: ' + played));
+      const best = PROFILE && PROFILE.records ? PROFILE.records[key] : null;
+      if (best) label.appendChild(el('span', 'played record', '🏆 ' + best));
+      else if (played) label.appendChild(el('span', 'played', 'сыграно: ' + played));
       tile.appendChild(label);
       tile.addEventListener('click', event => {
         ripple(event, tile);
@@ -364,6 +425,261 @@ function buildHome(root) {
   root.appendChild(chatGrid);
   root.appendChild(el('div', 'chat-note',
     'Этим играм нужен второй игрок — они запускаются в чате через инлайн-режим бота.'));
+}
+
+/* ---------- оформление игрока ---------- */
+
+const FRAME_DECOR = {
+  gold: ['✨', '✨'], neon: ['⚡', '⚡'], news: ['📰', '📰'],
+  web: ['🕸', '🕷'], anniversary: ['🎂', '🎉']
+};
+
+function avatarNode() {
+  const wrap = el('div', 'avatar frame-' + ((PROFILE && PROFILE.frame) || 'base'));
+  wrap.appendChild(el('span', null, (PROFILE && PROFILE.avatar) || '🙂'));
+  const decor = PROFILE && FRAME_DECOR[PROFILE.frame];
+  if (decor) {
+    wrap.appendChild(el('i', 'decor left', decor[0]));
+    wrap.appendChild(el('i', 'decor right', decor[1]));
+  }
+  return wrap;
+}
+
+/* ---------- баннеры событий ---------- */
+
+function banner(root, cls, icon, title, text, buttonLabel, onClick) {
+  const box = el('div', 'banner ' + cls);
+  box.appendChild(el('div', 'banner-icon', icon));
+  const body = el('div', 'banner-body');
+  body.appendChild(el('b', null, title));
+  body.appendChild(el('span', null, text));
+  box.appendChild(body);
+  if (buttonLabel) box.appendChild(button(buttonLabel, 'btn small', onClick));
+  root.appendChild(box);
+  return box;
+}
+
+function buildBanners(root) {
+  if (!PROFILE || !PROFILE.events) return;
+  const { halloween, anniversary } = PROFILE.events;
+  if (anniversary && anniversary.gift_available) {
+    banner(root, 'party', '🎂', 'Нам 1 год!', 'Заберите подарок: монеты и рамку «1 год»', 'Забрать', async () => {
+      try {
+        const out = await action('gift', {});
+        setCoins(out.profile);
+        haptic('win');
+        toast(out.granted ? '🎁 Получено: ' + out.reward : 'Подарок уже у вас', 2600);
+        goHome();
+      } catch (e) { toast(e.message); }
+    });
+  }
+  if (halloween && halloween.active) {
+    banner(root, 'spooky', '🎃', 'Ночь тыкв', 'Тыквы за каждую партию, лавка и общая цель — в боте: /event',
+      'Открыть', () => openChatCommand('/event'));
+  }
+  const season = PROFILE.season;
+  if (season && season.active) {
+    const box = banner(root, 'season', '⭐', 'Сезон 1 · уровень ' + season.level,
+      season.claimable ? 'Награды ждут: ' + season.claimable : 'XP за каждую партию и победу',
+      season.claimable ? 'Забрать' : null, () => openTab('season'));
+    box.addEventListener('click', event => { if (event.target === box || !event.target.closest('button')) openTab('season'); });
+    box.appendChild(progressBar('', season.into, season.per, true));
+  }
+}
+
+function openChatCommand(command) {
+  try {
+    if (tg && tg.openTelegramLink) {
+      tg.openTelegramLink('https://t.me/' + CFG.bot_username + '?start=event');
+      return;
+    }
+  } catch (e) { /* старый клиент */ }
+  toast('Напишите боту ' + command, 2600);
+}
+
+/* ---------- профиль ---------- */
+
+const RECORD_GAMES = { g2048: '2048', snake: 'Змейка', tetris: 'Тетрис', flappy: 'Flappy Bird', reaction: 'Блиц-реакция' };
+
+function buildProfile(root) {
+  if (!PROFILE) {
+    root.appendChild(el('div', 'panel', 'Откройте приложение через бота, чтобы видеть профиль.'));
+    return;
+  }
+  const panel = el('div', 'panel profile');
+  const hero = el('div', 'hero');
+  hero.appendChild(avatarNode());
+  const who = el('div', 'who');
+  who.appendChild(el('div', 'name', PROFILE.name));
+  who.appendChild(el('div', 'sub', PROFILE.titles.length ? PROFILE.titles.join(' · ') : 'без титулов — пока'));
+  hero.appendChild(who);
+  panel.appendChild(hero);
+
+  const stats = el('div', 'stat-row');
+  [[PROFILE.games_total, 'партий'], [PROFILE.best_streak, 'лучшая серия'],
+   [PROFILE.achievements + '/' + PROFILE.achievements_total, 'достижений'],
+   [PROFILE.quests_done + '/' + PROFILE.quests_total, 'квестов']].forEach(([v, l]) => {
+    const box = el('div', 'stat');
+    box.appendChild(el('b', null, String(v)));
+    box.appendChild(el('span', null, l));
+    stats.appendChild(box);
+  });
+  panel.appendChild(stats);
+  root.appendChild(panel);
+
+  root.appendChild(el('div', 'section-title', 'Рекорды'));
+  const records = el('div', 'list');
+  Object.entries(RECORD_GAMES).forEach(([key, name]) => {
+    const row = el('button', 'list-row');
+    row.appendChild(el('span', null, name));
+    const best = PROFILE.records[key];
+    row.appendChild(el('b', null, best ? String(best) : '—'));
+    row.addEventListener('click', () => openRecords(key, name));
+    records.appendChild(row);
+  });
+  root.appendChild(records);
+
+  const played = Object.entries(PROFILE.game_stats || {})
+    .filter(([, row]) => row && row.played)
+    .sort((a, b) => b[1].played - a[1].played);
+  if (played.length) {
+    root.appendChild(el('div', 'section-title', 'Любимые игры'));
+    const list = el('div', 'list');
+    const names = Object.assign({}, CFG.game_titles || {},
+      Object.fromEntries(CFG.games.concat(CFG.chat_only).map(([k, n, e]) => [k, e + ' ' + n])));
+    played.slice(0, 8).forEach(([key, row]) => {
+      const item = el('div', 'list-row');
+      item.appendChild(el('span', null, names[key] || key));
+      item.appendChild(el('b', null, row.played + ' · 🏆 ' + (row.wins || 0)));
+      list.appendChild(item);
+    });
+    root.appendChild(list);
+  }
+}
+
+function openRecords(game, name) {
+  openScreen('🏆 ' + name, true, root => {
+    const status = el('div', 'hint', 'Загружаем таблицу…');
+    root.appendChild(status);
+    action('records', { game }).then(data => {
+      status.remove();
+      const head = el('div', 'panel');
+      head.appendChild(el('div', 'bar-label', 'Ваш рекорд: ' + (data.best != null ? data.best + ' ' + data.unit : '—')));
+      head.appendChild(el('div', 'hint', 'Лучший за неделю: ' + (data.week_best != null ? data.week_best + ' ' + data.unit : '—')));
+      root.appendChild(head);
+      root.appendChild(el('div', 'section-title', 'Топ недели'));
+      const list = el('div', 'list');
+      if (!data.top.length) list.appendChild(el('div', 'list-row', 'На этой неделе рекордов ещё нет — станьте первым!'));
+      const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
+      data.top.forEach(row => {
+        const item = el('div', 'list-row' + (row.me ? ' me' : ''));
+        item.appendChild(el('span', null, (medals[row.place] || row.place + '.') + ' ' + row.name));
+        item.appendChild(el('b', null, row.score + ' ' + data.unit));
+        list.appendChild(item);
+      });
+      root.appendChild(list);
+      root.appendChild(button('▶️ Играть', 'btn wide', () => openGame(game, name)));
+    }).catch(e => { status.textContent = e.message; });
+  });
+}
+
+/* ---------- магазин ---------- */
+
+const SHOP_SECTIONS = [
+  ['coins', '🪙 За монеты'],
+  ['pumpkins', '🎃 Хеллоуин-лавка'],
+  ['special', '🎁 Особые предметы']
+];
+const TYPE_LABEL = { avatar: 'Аватар', frame: 'Рамка', theme: 'Тема', victory: 'Эффект победы' };
+
+function buildShop(root) {
+  const status = el('div', 'hint', 'Загружаем витрину…');
+  root.appendChild(status);
+  action('shop', { op: 'list' }).then(data => renderShop(root, data)).catch(e => { status.textContent = e.message; });
+}
+
+function renderShop(root, data) {
+  root.innerHTML = '';
+  if (data.profile) setCoins(data.profile);
+  SHOP_SECTIONS.forEach(([currency, title]) => {
+    const items = data.items.filter(i => i.currency === currency);
+    if (!items.length) return;
+    root.appendChild(el('div', 'section-title', title));
+    const grid = el('div', 'grid shop');
+    items.forEach(item => {
+      const card = el('div', 'shop-card' + (item.worn ? ' worn' : ''));
+      const preview = item.type === 'avatar' || item.type === 'victory' ? item.value
+        : item.type === 'frame' ? ((FRAME_DECOR[item.value] || ['🖼'])[0]) : '🎨';
+      card.appendChild(el('div', 'shop-preview', preview));
+      card.appendChild(el('b', null, item.name.split(': ').pop()));
+      card.appendChild(el('span', 'hint', TYPE_LABEL[item.type] || ''));
+      let label, op;
+      if (item.worn) { label = '✓ Надето'; op = null; }
+      else if (item.owned) { label = 'Надеть'; op = 'apply'; }
+      else { label = item.price + (currency === 'pumpkins' ? ' 🎃' : ' 🪙'); op = 'buy'; }
+      const btn = button(label, 'btn small' + (op === 'buy' ? '' : ' secondary'), async () => {
+        if (!op) return;
+        try {
+          const out = await action('shop', { op, item: item.id });
+          haptic(op === 'buy' ? 'win' : 'tap');
+          if (out.note) toast(out.note, 1800);
+          renderShop(root, out);
+        } catch (e) { haptic('lose'); toast(e.message); }
+      });
+      btn.disabled = !op;
+      card.appendChild(btn);
+      grid.appendChild(card);
+    });
+    stagger(grid.children, 30);
+    root.appendChild(grid);
+  });
+}
+
+/* ---------- сезонный пропуск ---------- */
+
+function buildSeason(root) {
+  const season = PROFILE && PROFILE.season;
+  if (!season || !season.active) {
+    root.appendChild(el('div', 'panel', '⭐ Сезонный пропуск стартует в день рождения бота — 13 ноября. Заходите!'));
+    return;
+  }
+  const status = el('div', 'hint', 'Загружаем пропуск…');
+  root.appendChild(status);
+  action('season', { op: 'view' }).then(data => renderSeason(root, data)).catch(e => { status.textContent = e.message; });
+}
+
+function renderSeason(root, data) {
+  root.innerHTML = '';
+  setCoins(data.profile);
+  const s = data.profile.season;
+  const head = el('div', 'panel season-head');
+  head.appendChild(el('div', 'season-level', String(s.level)));
+  const info = el('div', 'who');
+  info.appendChild(el('div', 'name', 'Сезон 1 · уровень ' + s.level + ' из ' + s.max));
+  info.appendChild(el('div', 'sub', 'до ' + data.ends + ' · партия +' + data.xp_play + ' XP, победа +' + data.xp_win + ' XP'));
+  head.appendChild(info);
+  root.appendChild(head);
+  if (s.level < s.max) root.appendChild(progressBar('До следующего уровня', s.into, s.per, true));
+  const ready = data.levels.filter(l => l.state === 'ready').length;
+  if (ready) {
+    root.appendChild(button('🎁 Забрать награды (' + ready + ')', 'btn wide', async () => {
+      try {
+        const out = await action('season', { op: 'claim' });
+        haptic('win');
+        toast('🎁 Награды за уровни: ' + out.granted.join(', '), 2600);
+        renderSeason(root, out);
+      } catch (e) { toast(e.message); }
+    }));
+  }
+  const list = el('div', 'levels');
+  data.levels.forEach(l => {
+    const row = el('div', 'level ' + l.state + (l.special ? ' special' : ''));
+    row.appendChild(el('span', 'level-num', String(l.level)));
+    row.appendChild(el('span', 'level-reward', l.reward));
+    row.appendChild(el('span', 'level-state', l.state === 'claimed' ? '✅' : l.state === 'ready' ? '🎁' : '🔒'));
+    list.appendChild(row);
+  });
+  root.appendChild(list);
 }
 
 function openChatGame(name, query) {
@@ -405,10 +721,49 @@ function openGame(key, name) {
       }
     }
   };
-  openScreen(name, true, root => builder(root, ctx));
+  openScreen(name, true, root => {
+    if (RECORD_GAMES[key]) recordBar(root, key, name);
+    return builder(root, ctx);
+  });
+}
+
+/** Строка над игрой: личный рекорд и вход в топ недели. */
+function recordBar(root, key, name) {
+  const bar = el('button', 'record-bar');
+  const best = PROFILE && PROFILE.records ? PROFILE.records[key] : null;
+  bar.appendChild(el('span', null, '🏆 Рекорд: ' + (best != null ? best : '—')));
+  bar.appendChild(el('span', 'hint', 'Топ недели ›'));
+  bar.addEventListener('click', () => openRecords(key, name));
+  root.appendChild(bar);
 }
 
 /* ---------- вспомогательные элементы игр ---------- */
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const BET_STEPS = [10, 25, 50, 100, 250, 500];
+let lastBet = 10;
+
+/** Ставка чипами; недоступные по балансу гаснут. Выбор запоминается между играми. */
+function betPicker(root) {
+  const row = el('div', 'chips');
+  function render() {
+    row.innerHTML = '';
+    const coins = PROFILE ? PROFILE.coins : 0;
+    if (lastBet > coins) lastBet = BET_STEPS.filter(v => v <= coins).pop() || BET_STEPS[0];
+    BET_STEPS.forEach(v => {
+      const chip = button(v + ' 🪙', 'chip' + (v === lastBet ? ' on' : ''), () => {
+        lastBet = v;
+        haptic('tap');
+        render();
+      });
+      chip.disabled = coins < v;
+      row.appendChild(chip);
+    });
+  }
+  render();
+  root.appendChild(row);
+  return { get: () => lastBet, refresh: render, el: row };
+}
 
 /** Строит клавиатуру рядами, как настоящую раскладку. */
 function keyboard(container, rows, onKey, isUsed) {
@@ -622,19 +977,35 @@ GAMES.millionaire = function (root, ctx) {
   });
 };
 
-/* Орёл или решка */
-GAMES.coin = function (root, ctx) {
-  const status = statusLine(root, 'Загадайте сторону');
-  hintLine(root, 'Чистая удача — 50 на 50.');
+/* Орёл или решка — монету бросает сервер */
+GAMES.coin = function (root) {
+  const face = el('div', 'coin-face', '🪙');
+  root.appendChild(face);
+  const status = statusLine(root, 'Выберите ставку и сторону');
+  hintLine(root, 'Угадали — ставка удваивается. 50 на 50.');
+  const picker = betPicker(root);
   const row = el('div', 'row');
-  [['Орёл', 'Орёл'], ['Решка', 'Решка']].forEach(([label, side]) => {
-    row.appendChild(button('🪙 ' + label, 'btn', () => {
-      const got = Math.random() < 0.5 ? 'Орёл' : 'Решка';
-      const win = got === side;
-      showOutcome(status, `Выпало: ${got} — ${win ? '🎉 угадали!' : '😢 мимо'}`, win ? 'wins' : 'losses');
-      ctx.finish(win ? 'wins' : 'losses');
-    }));
-  });
+  let busy = false;
+  const LABEL = { heads: 'Орёл', tails: 'Решка' };
+  ['heads', 'tails'].forEach(side => row.appendChild(button((side === 'heads' ? '🦅 ' : '🪙 ') + LABEL[side], 'btn', async () => {
+    if (busy) return;
+    busy = true;
+    face.classList.add('flip');
+    try {
+      const [out] = await Promise.all([action('luck', { game: 'coin', side, bet: picker.get() }), sleep(650)]);
+      face.textContent = out.got === 'heads' ? '🦅' : '🪙';
+      const win = out.result === 'wins';
+      showOutcome(status, `Выпал${out.got === 'heads' ? '' : 'а'} ${LABEL[out.got].toLowerCase()} — ${win ? '+' + out.bet : '−' + out.bet} 🪙`, out.result);
+      haptic(win ? 'win' : 'lose');
+      setCoins(out.profile);
+      picker.refresh();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      face.classList.remove('flip');
+      busy = false;
+    }
+  })));
   root.appendChild(row);
 };
 
@@ -720,40 +1091,41 @@ GAMES.reaction = function (root, ctx) {
   return () => { if (timer) clearTimeout(timer); };
 };
 
-/* Казино */
-GAMES.slot = function (root, ctx) {
+/* Казино — барабаны крутит сервер */
+GAMES.slot = function (root) {
   const SYMBOLS = ['🍒', '🍋', '🍉', '⭐', '💎', '7️⃣'];
-  const BET = 10;
   const reels = el('div', 'reels', '🎰 🎰 🎰');
   root.appendChild(reels);
-  const status = statusLine(root, `Ставка ${BET} 🪙`);
+  const status = statusLine(root, 'Выберите ставку');
+  hintLine(root, '7️⃣7️⃣7️⃣ — ×20 · три одинаковых — ×10 · пара — ставка возвращается');
+  const picker = betPicker(root);
   let spinning = false;
 
-  root.appendChild(button('🎰 Крутить', 'btn wide', () => {
+  root.appendChild(button('🎰 Крутить', 'btn wide', async () => {
     if (spinning) return;
     spinning = true;
     reels.classList.add('spin');
-    let ticks = 0;
-    const anim = setInterval(() => {
-      reels.textContent = [0, 1, 2].map(() => pick(SYMBOLS)).join(' ');
-      if (++ticks < 12) return;
+    const anim = setInterval(() => { reels.textContent = [0, 1, 2].map(() => pick(SYMBOLS)).join(' '); }, 70);
+    try {
+      const [out] = await Promise.all([action('luck', { game: 'slot', bet: picker.get() }), sleep(900)]);
       clearInterval(anim);
-      spinning = false;
+      reels.textContent = out.reels.join(' ');
+      const text = out.multiplier >= 20 ? `💰 ДЖЕКПОТ! +${out.win - out.bet} 🪙`
+        : out.multiplier >= 10 ? `🎉 Три в ряд! +${out.win - out.bet} 🪙`
+        : out.multiplier === 1 ? '✨ Пара — ставка вернулась'
+        : `😢 Мимо — −${out.bet} 🪙`;
+      showOutcome(status, text, out.result);
+      haptic(out.result === 'wins' ? 'win' : out.result === 'losses' ? 'lose' : 'tap');
+      setCoins(out.profile);
+      picker.refresh();
+    } catch (e) {
+      clearInterval(anim);
+      reels.textContent = '🎰 🎰 🎰';
+      toast(e.message);
+    } finally {
       reels.classList.remove('spin');
-      const roll = [pick(SYMBOLS), pick(SYMBOLS), pick(SYMBOLS)];
-      reels.textContent = roll.join(' ');
-      const unique = new Set(roll).size;
-      if (unique === 1) {
-        showOutcome(status, '🎉 Джекпот!', 'wins');
-        ctx.finish('wins', { bet: BET });
-      } else if (unique === 2) {
-        showOutcome(status, '✨ Почти!', 'draws');
-        ctx.finish('draws', { bet: BET });
-      } else {
-        showOutcome(status, '😢 Мимо', 'losses');
-        ctx.finish('losses', { bet: BET });
-      }
-    }, 70);
+      spinning = false;
+    }
   }));
 };
 
@@ -1538,219 +1910,123 @@ function renderCards(node, cards, hiddenFrom) {
   cards.forEach((card, index) => {
     const hidden = hiddenFrom !== undefined && index >= hiddenFrom;
     const cls = 'card-in' + (!hidden && isRed(card) ? ' red' : '');
-    const span = el('span', cls, hidden ? '🂠 ' : cardLabel(card) + ' ');
+    const span = el('span', cls, hidden || card[0] === '?' ? '🂠 ' : cardLabel(card) + ' ');
     span.style.animationDelay = Math.min(index * 70, 350) + 'ms';
     node.appendChild(span);
   });
 }
 
-/* Блэкджек */
-GAMES.blackjack = function (root, ctx) {
-  const SUITS = ['♠', '♥', '♦', '♣'];
-  const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-  const BET = 10;
-  let deck, player, dealer, over;
-
+/* Блэкджек — колода и дилер на сервере */
+GAMES.blackjack = function (root) {
   const dealerEl = el('div', 'cards');
   const playerEl = el('div', 'cards');
   root.appendChild(el('div', 'hint', 'Дилер'));
   root.appendChild(dealerEl);
   root.appendChild(el('div', 'hint', 'Вы'));
   root.appendChild(playerEl);
-  const status = statusLine(root, `Ставка ${BET} 🪙`);
+  const status = statusLine(root, 'Выберите ставку и раздайте карты');
   const actions = el('div', 'row');
   root.appendChild(actions);
+  const picker = betPicker(root);
+  let busy = false;
 
-  function value(hand) {
-    let total = 0, aces = 0;
-    hand.forEach(([rank]) => {
-      if (rank === 'A') { total += 11; aces += 1; }
-      else if (['J', 'Q', 'K'].includes(rank)) total += 10;
-      else total += parseInt(rank, 10);
-    });
-    while (total > 21 && aces > 0) { total -= 10; aces -= 1; }
-    return total;
+  async function send(body) {
+    if (busy) return;
+    busy = true;
+    try {
+      const out = await action('luck', Object.assign({ game: 'blackjack' }, body));
+      setCoins(out.profile);
+      render(out.table);
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      busy = false;
+    }
   }
 
-  function render(revealDealer) {
-    renderCards(dealerEl, dealer, revealDealer ? undefined : 1);
-    renderCards(playerEl, player);
-    if (revealDealer) dealerEl.appendChild(el('span', null, ' (' + value(dealer) + ')'));
-    playerEl.appendChild(el('span', null, ' (' + value(player) + ')'));
-  }
-
-  function finish(result) {
-    over = true;
-    render(true);
-    showOutcome(status, result === 'wins' ? '🎉 Вы выиграли' : result === 'losses' ? '💀 Дилер выиграл' : '🤝 Ничья', result);
-    ctx.finish(result, { bet: BET, score: value(player) + ':' + value(dealer) });
-    buildActions();
-  }
-
-  function buildActions() {
+  function render(t) {
+    const hidden = Array(t.dealer_hidden).fill(['?', '?']);
+    renderCards(dealerEl, t.dealer.concat(hidden), t.dealer.length);
+    dealerEl.appendChild(el('span', null, ' (' + t.dealer_value + (t.dealer_hidden ? '+?' : '') + ')'));
+    renderCards(playerEl, t.player);
+    playerEl.appendChild(el('span', null, ' (' + t.player_value + ')'));
     actions.innerHTML = '';
-    if (over) {
-      actions.appendChild(button('🔁 Новая партия', 'btn', deal));
+    if (t.status === 'playing') {
+      status.textContent = `Ставка ${t.bet} 🪙`;
+      picker.el.hidden = true;
+      actions.appendChild(button('➕ Ещё', 'btn', () => send({ action: 'hit' })));
+      actions.appendChild(button('🛑 Хватит', 'btn secondary', () => send({ action: 'stand' })));
       return;
     }
-    actions.appendChild(button('➕ Ещё', 'btn', () => {
-      player.push(deck.pop());
-      if (value(player) > 21) return finish('losses');
-      render(false);
-    }));
-    actions.appendChild(button('🛑 Хватит', 'btn secondary', () => {
-      while (value(dealer) < 17 && deck.length) dealer.push(deck.pop());
-      const p = value(player), d = value(dealer);
-      finish(d > 21 || p > d ? 'wins' : p < d ? 'losses' : 'draws');
-    }));
+    const text = t.result === 'wins' ? `🎉 Вы выиграли +${t.bet} 🪙` : t.result === 'losses' ? `💀 Дилер выиграл −${t.bet} 🪙` : '🤝 Ничья — ставка вернулась';
+    showOutcome(status, text, t.result);
+    haptic(t.result === 'wins' ? 'win' : t.result === 'losses' ? 'lose' : 'tap');
+    picker.el.hidden = false;
+    picker.refresh();
+    actions.appendChild(button('🃏 Новая раздача', 'btn', () => send({ action: 'start', bet: picker.get() })));
   }
 
-  function deal() {
-    deck = [];
-    SUITS.forEach(s => RANKS.forEach(r => deck.push([r, s])));
-    deck.sort(() => Math.random() - 0.5);
-    player = [deck.pop(), deck.pop()];
-    dealer = [deck.pop(), deck.pop()];
-    over = false;
-    status.textContent = `Ставка ${BET} 🪙`;
-    if (value(player) === 21) return finish(value(dealer) === 21 ? 'draws' : 'wins');
-    render(false);
-    buildActions();
-  }
-
-  deal();
+  actions.appendChild(button('🃏 Раздать', 'btn', () => send({ action: 'start', bet: picker.get() })));
 };
 
-/* Покер (Техасский холдем против бота) */
-GAMES.poker = function (root, ctx) {
-  const RANKS = ctx.cfg.poker_ranks;
-  const SUITS = ctx.cfg.poker_suits;
-  const NAMES = ctx.cfg.poker_hand_names;
-  const STAGES = ['preflop', 'flop', 'turn', 'river', 'showdown'];
-  const VISIBLE = { preflop: 0, flop: 3, turn: 4, river: 5, showdown: 5 };
+/* Покер — техасский холдем против бота, раздаёт сервер */
+GAMES.poker = function (root) {
   const STAGE_LABEL = { preflop: 'Префлоп', flop: 'Флоп', turn: 'Тёрн', river: 'Ривер', showdown: 'Вскрытие' };
-  let bet = 10;
-  let deck, player, botHand, community, stage, over;
-
-  const info = el('div', 'hint', '');
+  const info = el('div', 'hint', 'Выберите ставку и садитесь за стол');
   root.appendChild(info);
   root.appendChild(el('div', 'hint', 'Общие карты'));
-  const communityEl = el('div', 'cards');
+  const communityEl = el('div', 'cards', '—');
   root.appendChild(communityEl);
   root.appendChild(el('div', 'hint', 'Бот'));
-  const botEl = el('div', 'cards');
+  const botEl = el('div', 'cards', '—');
   root.appendChild(botEl);
   root.appendChild(el('div', 'hint', 'Вы'));
-  const playerEl = el('div', 'cards');
+  const playerEl = el('div', 'cards', '—');
   root.appendChild(playerEl);
   const status = statusLine(root, '');
   const actions = el('div', 'row');
   root.appendChild(actions);
-  const betRow = el('div', 'row');
-  root.appendChild(betRow);
+  const picker = betPicker(root);
+  let busy = false;
 
-  function handRank(cards) {
-    const values = cards.map(c => RANKS.indexOf(c[0])).sort((a, b) => b - a);
-    const flush = new Set(cards.map(c => c[1])).size === 1;
-    const unique = new Set(values);
-    let straight = unique.size === 5 && values[0] - values[4] === 4;
-    let ordered = values.slice();
-    if (unique.size === 5 && values[0] === 12 && values[1] === 3) { straight = true; ordered = [3, 2, 1, 0, -1]; }
-
-    const counts = [...unique].map(v => [values.filter(x => x === v).length, v]).sort((a, b) => b[0] - a[0] || b[1] - a[1]);
-    const shape = counts.map(c => c[0]);
-    const byCount = counts.map(c => c[1]);
-
-    if (straight && flush) return [8, ordered];
-    if (shape[0] === 4) return [7, byCount];
-    if (shape[0] === 3 && shape[1] === 2) return [6, byCount];
-    if (flush) return [5, ordered];
-    if (straight) return [4, ordered];
-    if (shape[0] === 3) return [3, byCount];
-    if (shape[0] === 2 && shape[1] === 2) return [2, byCount];
-    if (shape[0] === 2) return [1, byCount];
-    return [0, ordered];
-  }
-
-  function compare(a, b) {
-    if (a[0] !== b[0]) return a[0] - b[0];
-    for (let i = 0; i < Math.max(a[1].length, b[1].length); i++) {
-      const diff = (a[1][i] || 0) - (b[1][i] || 0);
-      if (diff) return diff;
+  async function send(body) {
+    if (busy) return;
+    busy = true;
+    try {
+      const out = await action('luck', Object.assign({ game: 'poker' }, body));
+      setCoins(out.profile);
+      render(out.table);
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      busy = false;
     }
-    return 0;
   }
 
-  function best(cards) {
-    let top = null;
-    const n = cards.length;
-    for (let a = 0; a < n - 4; a++)
-      for (let b = a + 1; b < n - 3; b++)
-        for (let c = b + 1; c < n - 2; c++)
-          for (let d = c + 1; d < n - 1; d++)
-            for (let e = d + 1; e < n; e++) {
-              const rank = handRank([cards[a], cards[b], cards[c], cards[d], cards[e]]);
-              if (!top || compare(rank, top) > 0) top = rank;
-            }
-    return top;
-  }
-
-  function render() {
-    info.textContent = `Ставка ${bet} 🪙 · Стадия: ${STAGE_LABEL[stage]}`;
-    renderCards(communityEl, community.slice(0, VISIBLE[stage]));
-    if (!community.slice(0, VISIBLE[stage]).length) communityEl.textContent = '—';
-    renderCards(botEl, botHand, over ? undefined : 0);
-    renderCards(playerEl, player);
-    buildActions();
-  }
-
-  function buildActions() {
+  function render(t) {
+    info.textContent = `Ставка ${t.bet} 🪙 · ${STAGE_LABEL[t.stage]}`;
+    renderCards(communityEl, t.community);
+    if (!t.community.length) communityEl.textContent = '—';
+    renderCards(botEl, t.bot.length ? t.bot : [['?', '?'], ['?', '?']], t.bot.length ? undefined : 0);
+    renderCards(playerEl, t.player);
     actions.innerHTML = '';
-    betRow.innerHTML = '';
-    if (over) {
-      [10, 50, 100].forEach(v => betRow.appendChild(button(v + ' 🪙', 'btn secondary', () => { bet = v; deal(); })));
+    if (t.status === 'playing') {
+      status.textContent = '';
+      picker.el.hidden = true;
+      actions.appendChild(button(t.stage === 'river' ? '🔍 Вскрыть' : '➡️ Чек', 'btn', () => send({ action: 'next' })));
+      actions.appendChild(button('🏳️ Сбросить', 'btn secondary', () => send({ action: 'fold' })));
       return;
     }
-    if (stage !== 'showdown') {
-      actions.appendChild(button('➡️ Дальше', 'btn', () => {
-        stage = STAGES[STAGES.indexOf(stage) + 1];
-        render();
-      }));
-      actions.appendChild(button('🏳️ Сдаться', 'btn secondary', () => finish('losses')));
-    } else {
-      actions.appendChild(button('🔍 Вскрыть карты', 'btn', () => {
-        const mine = best(player.concat(community));
-        const theirs = best(botHand.concat(community));
-        const cmp = compare(mine, theirs);
-        finish(cmp > 0 ? 'wins' : cmp < 0 ? 'losses' : 'draws', mine, theirs);
-      }));
-    }
-  }
-
-  function finish(result, mine, theirs) {
-    over = true;
-    stage = 'showdown';
-    const text = result === 'wins' ? '🏆 Вы победили!' : result === 'losses' ? '💀 Бот победил' : '🤝 Ничья';
     status.style.whiteSpace = 'pre-line';
-    showOutcome(status, mine ? `${text}\nУ вас: ${NAMES[mine[0]]}\nУ бота: ${NAMES[theirs[0]]}` : text, result);
-    ctx.finish(result, { bet });
-    render();
+    const head = t.result === 'wins' ? `🏆 Вы победили +${t.bet} 🪙` : t.result === 'losses' ? `💀 Бот победил −${t.bet} 🪙` : '🤝 Ничья — ставка вернулась';
+    showOutcome(status, t.player_hand ? `${head}\nУ вас: ${t.player_hand}\nУ бота: ${t.bot_hand}` : head, t.result);
+    haptic(t.result === 'wins' ? 'win' : t.result === 'losses' ? 'lose' : 'tap');
+    picker.el.hidden = false;
+    picker.refresh();
+    actions.appendChild(button('🃏 Новая раздача', 'btn', () => send({ action: 'start', bet: picker.get() })));
   }
 
-  function deal() {
-    deck = [];
-    SUITS.forEach(s => RANKS.forEach(r => deck.push([r, s])));
-    deck.sort(() => Math.random() - 0.5);
-    player = [deck.pop(), deck.pop()];
-    botHand = [deck.pop(), deck.pop()];
-    community = [deck.pop(), deck.pop(), deck.pop(), deck.pop(), deck.pop()];
-    stage = 'preflop';
-    over = false;
-    status.textContent = '';
-    render();
-  }
-
-  deal();
+  actions.appendChild(button('🃏 Сесть за стол', 'btn', () => send({ action: 'start', bet: picker.get() })));
 };
 
 /* ---------- запуск ---------- */

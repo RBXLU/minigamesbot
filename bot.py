@@ -39,6 +39,7 @@ from core.db import (
     update_state_key,
     user_exists,
 )
+from core import casino
 from core import events as ev
 from room_games import (
     ROOM_VOTE_GAMES,
@@ -446,6 +447,8 @@ WHATS_NEW_RELEASES = {
             "🏆 Топ тыкв: первые 10 получат титул «Король тыкв 2026» — его не купить.",
             "🎨 Рамки и темы из магазина теперь видно в профиле.",
             "⚡ Бот стал заметно быстрее и больше не падает под нагрузкой.",
+            "👥 Бот работает в любой группе: добавьте его, сделайте админом и откройте /games.",
+            "📱 Новый Mini App: вкладки, магазин, рекорды недели и честное казино — ставки разыгрывает сервер.",
         ],
         "en": [
             "🎃 Pumpkin Night, Oct 25 – Nov 2: collect pumpkins in games and on hunts in group chats, "
@@ -456,6 +459,8 @@ WHATS_NEW_RELEASES = {
             "🏆 Pumpkin leaderboard: the top 10 get the King of Pumpkins 2026 title — it can't be bought.",
             "🎨 Frames and themes from the shop are now visible in your profile.",
             "⚡ The bot is noticeably faster and no longer crashes under load.",
+            "👥 The bot now works in any group: add it, make it admin and open /games.",
+            "📱 New Mini App: tabs, shop, weekly records and a fair casino — bets are settled by the server.",
         ],
         "uk": [
             "🎃 «Ніч гарбузів» з 25 жовтня по 2 листопада: збирайте гарбузи в іграх і на полюванні в групах, "
@@ -466,6 +471,8 @@ WHATS_NEW_RELEASES = {
             "🏆 Топ гарбузів: перші 10 отримають титул «Король гарбузів 2026» — його не купити.",
             "🎨 Рамки й теми з крамниці тепер видно в профілі.",
             "⚡ Бот став помітно швидшим і більше не падає під навантаженням.",
+            "👥 Бот працює в будь-якій групі: додайте його, зробіть адміном і відкрийте /games.",
+            "📱 Новий Mini App: вкладки, крамниця, рекорди тижня й чесне казино — ставки розігрує сервер.",
         ],
     },
     "2.0.0": {
@@ -1061,7 +1068,8 @@ WEBAPP_GAMES = [
     ("millionaire", "Миллионер", "💰", "quiz"),
 ]
 WEBAPP_GAME_KEYS = {key for key, _, _, _ in WEBAPP_GAMES}
-WEBAPP_BET_GAMES = {"poker", "blackjack", "slot"}
+# Эти игры разыгрывает сервер (/api/action/luck): отчёт клиента о них не принимается.
+WEBAPP_SERVER_GAMES = {"coin", "slot", "blackjack", "poker"}
 
 # Игры, которым нужен чат Telegram: из Mini App ведём обратно в бота
 WEBAPP_CHAT_ONLY_GAMES = [
@@ -5469,6 +5477,9 @@ def start(message):
             ))
     else:
         _referral_flush(uid)
+    # Ссылка t.me/<бот>?start=event из Mini App сразу открывает экран ивента.
+    if (message.text or "").split()[1:2] == ["event"] and (halloween_active() or ev.is_event_finished(ev.HALLOWEEN)):
+        show_halloween(message.chat.id, uid)
 
 
 @bot.message_handler(commands=["ref", "invite"])
@@ -11831,6 +11842,7 @@ def _webapp_datasets():
         "games": WEBAPP_GAMES,
         "chat_only": WEBAPP_CHAT_ONLY_GAMES,
         "bot_username": INLINE_BOT_USERNAME,
+        "game_titles": GAME_TITLES,
         "wordle_words": WORDLE_WORDS,
         "hangman_words": HANGMAN_WORDS,
         "hangman_alphabet": HANGMAN_ALPHABET,
@@ -11850,19 +11862,223 @@ def _webapp_profile(user_id, tg_user=None):
         _remember_display_name(user_id, tg_user)
     rec, unlocked = _load_profile(user_id)
     completed_quests, total_quests = _quest_completion_summary(user_id)
+    hw_bucket = _hw_bucket(rec)
+    season = _season_bucket(rec)
+    level, into, per = ev.season_progress(season["xp"])
     return {
         "user_id": user_id,
         "name": rec.get("display_name") or (tg_user or {}).get("first_name") or f"user_{user_id}",
         "coins": int(rec.get("coins", 0) or 0),
         "games_total": int(rec.get("games_total", 0) or 0),
         "streak": int(rec.get("streak_current", 0) or 0),
+        "best_streak": int(rec.get("streak_best", 0) or 0),
         "achievements": len(unlocked),
         "achievements_total": len(ACHIEVEMENTS),
         "quests_done": completed_quests,
         "quests_total": total_quests,
         "game_stats": _game_stats(rec),
         "avatar": rec.get("avatar_emoji", "🙂"),
+        "frame": rec.get("frame_style", "base"),
+        "theme": rec.get("theme_style", "classic"),
+        "titles": rec.get("titles") if isinstance(rec.get("titles"), list) else [],
+        "records": _records_of(rec),
+        "season": {
+            "active": season_active(),
+            "level": level, "into": into, "per": per, "max": ev.SEASON_MAX_LEVEL,
+            "claimable": len(ev.claimable_levels(season)),
+        },
+        "events": {
+            "halloween": {
+                "active": halloween_active(),
+                "finished": ev.is_event_finished(ev.HALLOWEEN),
+                "pumpkins": hw_bucket["pumpkins"],
+                "earned": hw_bucket["earned"],
+            },
+            "anniversary": {
+                "active": anniversary_active(),
+                "gift_available": anniversary_active() and not _birthday_gift_claimed(rec),
+            },
+        },
     }
+
+
+# ------------------------------- рекорды -------------------------------
+# Счёт присылает клиент, поэтому неправдоподобные значения отбрасываем.
+WEBAPP_RECORD_GAMES = {
+    # игра: (больше — лучше?, предел правдоподобия, подпись)
+    "g2048": (True, 4_000_000, "очков"),
+    "snake": (True, 1000, "очков"),
+    "tetris": (True, 10_000_000, "очков"),
+    "flappy": (True, 100_000, "очков"),
+    "reaction": (False, 100, "мс"),
+}
+
+
+def _week_id():
+    year, week, _ = date.today().isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _records_of(rec):
+    records = rec.get("records")
+    return dict(records) if isinstance(records, dict) else {}
+
+
+def _parse_score(game_key, raw):
+    rule = WEBAPP_RECORD_GAMES.get(game_key)
+    if not rule:
+        return None
+    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    if not digits:
+        return None
+    value = int(digits[:9])
+    higher, limit, _ = rule
+    if (higher and value > limit) or (not higher and value < limit) or value <= 0:
+        return None
+    return value
+
+
+def _better(game_key, new, old):
+    higher = WEBAPP_RECORD_GAMES[game_key][0]
+    return old is None or (new > old if higher else new < old)
+
+
+def _save_record(uid, game_key, raw_score):
+    """True, если это новый личный рекорд."""
+    value = _parse_score(game_key, raw_score)
+    if value is None:
+        return False
+    with user_record(uid) as rec:
+        records = rec.get("records")
+        if not isinstance(records, dict):
+            records = rec["records"] = {}
+        week = rec.get("records_week")
+        if not isinstance(week, dict) or week.get("week") != _week_id():
+            week = rec["records_week"] = {"week": _week_id()}
+        if _better(game_key, value, week.get(game_key)):
+            week[game_key] = value
+            _records_cache.pop(game_key, None)
+        if _better(game_key, value, records.get(game_key)):
+            records[game_key] = value
+            return True
+    return False
+
+
+_records_cache = {}
+
+
+def _weekly_top(game_key, limit=10):
+    """Лучшие за неделю; полный проход по базе — с кэшем на 5 минут."""
+    cached = _records_cache.get(game_key)
+    if cached and time.time() - cached[0] < 300:
+        return cached[1]
+    rows = []
+    week_id = _week_id()
+    for uid_str, rec in load_data().get("users", {}).items():
+        week = rec.get("records_week") if isinstance(rec, dict) else None
+        if isinstance(week, dict) and week.get("week") == week_id and week.get(game_key):
+            rows.append((week[game_key], uid_str, str(rec.get("display_name") or f"user_{uid_str}")))
+    higher = WEBAPP_RECORD_GAMES[game_key][0]
+    rows.sort(key=lambda row: (-row[0] if higher else row[0], row[1]))
+    top = [{"place": i, "name": name, "score": score, "me": uid_str}
+           for i, (score, uid_str, name) in enumerate(rows[:limit], 1)]
+    _records_cache[game_key] = (time.time(), top)
+    return top
+
+
+def _webapp_records(uid, tg_user, payload):
+    game_key = str(payload.get("game") or "")
+    if game_key not in WEBAPP_RECORD_GAMES:
+        raise ValueError("no records for this game")
+    rec = load_user_record(uid)
+    week = rec.get("records_week") if isinstance(rec.get("records_week"), dict) else {}
+    top = [dict(row, me=row["me"] == str(uid)) for row in _weekly_top(game_key)]
+    return {
+        "game": game_key,
+        "unit": WEBAPP_RECORD_GAMES[game_key][2],
+        "higher_better": WEBAPP_RECORD_GAMES[game_key][0],
+        "best": _records_of(rec).get(game_key),
+        "week_best": week.get(game_key) if week.get("week") == _week_id() else None,
+        "top": top,
+    }
+
+
+# ------------------------------- магазин -------------------------------
+def _webapp_shop(uid, tg_user, payload):
+    op = str(payload.get("op") or "list")
+    item_id = str(payload.get("item") or "")
+    note = None
+    if op in ("buy", "apply"):
+        item = _shop_item(item_id)
+        if not item:
+            raise ValueError("unknown item")
+        with user_record(uid) as rec:
+            _ensure_profile_fields(rec)
+            inv = rec.setdefault("inventory", [])
+            if op == "buy":
+                if item_id in inv:
+                    note = "Уже куплено"
+                elif item_id in SHOP_ITEMS:
+                    coins = int(rec.get("coins", 0) or 0)
+                    if coins < int(item["price"]):
+                        raise ValueError("not enough coins")
+                    rec["coins"] = coins - int(item["price"])
+                    inv.append(item_id)
+                    _apply_cosmetic(rec, item_id, item)
+                    note = f"Куплено: {item['name']}"
+                elif item_id in EVENT_SHOP_ITEMS and halloween_active():
+                    if not ev.spend(_hw_bucket(rec), item["price"]):
+                        raise ValueError("not enough pumpkins")
+                    inv.append(item_id)
+                    _apply_cosmetic(rec, item_id, item)
+                    note = f"Куплено: {item['name']}"
+                else:
+                    raise ValueError("not for sale")
+            else:
+                if item_id not in inv:
+                    raise ValueError("not owned")
+                _apply_cosmetic(rec, item_id, item)
+                note = f"Надето: {item['name']}"
+    rec = load_user_record(uid)
+    inv = set(rec.get("inventory", []))
+    worn = {rec.get(f"{kind}_item_id") for kind in ("avatar", "frame", "theme", "victory")}
+
+    def row(item_id, item, currency):
+        return {"id": item_id, "name": item["name"], "type": item["type"], "value": item["value"],
+                "price": item["price"], "currency": currency, "owned": item_id in inv, "worn": item_id in worn}
+
+    items = [row(i, it, "coins") for i, it in SHOP_ITEMS.items()]
+    if halloween_active():
+        items += [row(i, it, "pumpkins") for i, it in EVENT_SHOP_ITEMS.items()]
+    items += [row(i, it, "special") for i, it in _owned_special_items(rec)
+              if not (halloween_active() and i in EVENT_SHOP_ITEMS)]
+    return {"items": items, "note": note, "profile": _webapp_profile(uid, tg_user)}
+
+
+# ------------------------------- сезон и подарок -------------------------------
+def _webapp_season(uid, tg_user, payload):
+    granted = _season_claim(uid) if payload.get("op") == "claim" and season_active() else []
+    bucket = _season_bucket(load_user_record(uid))
+    level = ev.season_level(bucket["xp"])
+    claimed = set(bucket.get("claimed", []))
+    levels = []
+    for lvl in range(1, ev.SEASON_MAX_LEVEL + 1):
+        reward = ev.season_reward(lvl)
+        levels.append({
+            "level": lvl,
+            "reward": _reward_text(reward) + (f", титул «{reward['title']}»" if reward.get("title") else ""),
+            "special": lvl in ev.SEASON_REWARDS,
+            "state": "claimed" if lvl in claimed else "ready" if lvl <= level else "locked",
+        })
+    _, end = ev.event_window(ev.SEASON)
+    return {"granted": granted, "levels": levels, "ends": end.strftime("%d.%m.%Y"),
+            "xp_play": ev.season_xp_per_play(), "xp_win": ev.season_xp_per_win(),
+            "profile": _webapp_profile(uid, tg_user)}
+
+
+def _webapp_gift(uid, tg_user, payload):
+    granted = _claim_birthday_gift(uid)
+    return {"granted": granted, "reward": _reward_text(ev.BIRTHDAY_GIFT), "profile": _webapp_profile(uid, tg_user)}
 
 
 def _remember_display_name(user_id, tg_user):
@@ -11879,7 +12095,6 @@ def _remember_display_name(user_id, tg_user):
 # считаются на сервере, ограничиваем, сколько можно так «наиграть».
 WEBAPP_MIN_REPORT_INTERVAL = float(os.getenv("WEBAPP_MIN_REPORT_INTERVAL", "3"))
 WEBAPP_DAILY_REPORTS = int(os.getenv("WEBAPP_DAILY_REPORTS", "150"))
-WEBAPP_DAILY_BET_PROFIT = int(os.getenv("WEBAPP_DAILY_BET_PROFIT", "200"))
 _webapp_last_report = {}
 
 
@@ -11892,7 +12107,7 @@ def _webapp_report_allowed(user_id):
     with user_record(user_id) as rec:
         day = rec.get("webapp_day")
         if not isinstance(day, dict) or day.get("date") != today:
-            day = rec["webapp_day"] = {"date": today, "reports": 0, "bet_profit": 0}
+            day = rec["webapp_day"] = {"date": today, "reports": 0}
         if int(day.get("reports", 0)) >= WEBAPP_DAILY_REPORTS:
             return False
         day["reports"] = int(day.get("reports", 0)) + 1
@@ -11904,6 +12119,8 @@ def _webapp_apply_result(user_id, tg_user, payload):
     game_key = str(payload.get("game") or "").strip()
     if game_key not in WEBAPP_GAME_KEYS:
         raise ValueError("unknown game")
+    if game_key in WEBAPP_SERVER_GAMES:
+        raise ValueError("this game is played on the server")
     if not _webapp_report_allowed(user_id):
         # Профиль всё равно отдаём: клиент обновит баланс и не сломается.
         return _webapp_profile(user_id, tg_user)
@@ -11919,43 +12136,114 @@ def _webapp_apply_result(user_id, tg_user, payload):
             if payload.get(key) is not None:
                 extra[key] = str(payload[key])[:64]
 
-        bet = payload.get("bet")
-        if game_key in WEBAPP_BET_GAMES and bet is not None:
-            try:
-                bet = max(1, min(500, int(bet)))
-            except (TypeError, ValueError):
-                bet = None
-            if bet:
-                extra["bet"] = bet
-                _webapp_settle_bet(user_id, bet, result)
-
         _record_game_result(user_id, game_key, result, extra=extra or None)
 
+    new_record = game_key in WEBAPP_RECORD_GAMES and _save_record(user_id, game_key, payload.get("score"))
     update_user_streak(user_id, display_name)
-    return _webapp_profile(user_id, tg_user)
+    profile = _webapp_profile(user_id, tg_user)
+    profile["new_record"] = bool(new_record)
+    return profile
 
 
-def _webapp_settle_bet(user_id, bet, result):
-    """Ставка играет, только если она есть на балансе; чистый выигрыш за день ограничен."""
-    if result == "draws":
-        return
-    today = date.today().isoformat()
-    with user_record(user_id) as rec:
+# ------------------------- игры на удачу на сервере -------------------------
+# Ставка списывается при начале раздачи и выплачивается сервером: закрыть
+# приложение, увидев плохие карты, бесполезно — ставка уже в банке.
+webapp_tables = BoundedGames()     # uid -> {"game", "bet", "state", "session"}
+
+
+def _luck_take_bet(uid, raw_bet):
+    """Списывает ставку; возвращает её размер или None, если денег не хватает."""
+    with user_record(uid) as rec:
         _ensure_profile_fields(rec)
         coins = int(rec.get("coins", 0) or 0)
-        if coins < bet:
-            return
-        day = rec.get("webapp_day")
-        if not isinstance(day, dict) or day.get("date") != today:
-            day = rec["webapp_day"] = {"date": today, "reports": 0, "bet_profit": 0}
-        profit = int(day.get("bet_profit", 0))
-        if result == "wins":
-            gain = max(0, min(bet, WEBAPP_DAILY_BET_PROFIT - profit))
-            rec["coins"] = coins + gain
-            day["bet_profit"] = profit + gain
-        else:
+        bet = casino.clamp_bet(raw_bet, coins)
+        if bet is not None:
             rec["coins"] = coins - bet
-            day["bet_profit"] = profit - bet
+    return bet
+
+
+def _luck_settle(uid, game_key, bet, result, session, extra=None, multiplier=None):
+    """Выплата и запись партии в статистику, квесты, тыквы и XP."""
+    win = bet * multiplier if multiplier is not None else casino.payout(bet, result)
+    if win:
+        with user_record(uid) as rec:
+            rec["coins"] = int(rec.get("coins", 0) or 0) + win
+    _record_game_play_once(uid, game_key, f"webapp_{session}")
+    details = {"bet": bet}
+    details.update(extra or {})
+    _record_game_result_once(uid, game_key, result, f"webapp_{session}", extra=details)
+    return win
+
+
+def _webapp_luck(uid, tg_user, payload):
+    # Одна блокировка на списание, розыгрыш и выплату: два одновременных
+    # запроса не возьмут ставку дважды и не откроют два стола.
+    with _USER_RECORD_LOCK:
+        return _webapp_luck_locked(uid, tg_user, payload)
+
+
+def _webapp_luck_locked(uid, tg_user, payload):
+    game = str(payload.get("game") or "")
+    action = str(payload.get("action") or "")
+    out = {}
+    if game == "coin":
+        side = "heads" if payload.get("side") == "heads" else "tails"
+        bet = _luck_take_bet(uid, payload.get("bet"))
+        if bet is None:
+            raise ValueError("not enough coins")
+        got, result = casino.coin_flip(side)
+        win = _luck_settle(uid, "coin", bet, result, short_id())
+        out = {"got": got, "result": result, "bet": bet, "win": win}
+    elif game == "slot":
+        bet = _luck_take_bet(uid, payload.get("bet"))
+        if bet is None:
+            raise ValueError("not enough coins")
+        reels, multiplier = casino.slot_spin()
+        result = "wins" if multiplier > 1 else "draws" if multiplier == 1 else "losses"
+        win = _luck_settle(uid, "slot", bet, result, short_id(), {"reels": "".join(reels)}, multiplier)
+        out = {"reels": reels, "multiplier": multiplier, "result": result, "bet": bet, "win": win}
+    elif game in ("blackjack", "poker"):
+        out = _webapp_card_table(uid, game, action, payload)
+    else:
+        raise ValueError("unknown game")
+    out["profile"] = _webapp_profile(uid, tg_user)
+    return out
+
+
+def _webapp_card_table(uid, game, action, payload):
+    table = webapp_tables.get(uid)
+    if action == "start":
+        if table and table["state"]["status"] == "playing":
+            # Незаконченная раздача продолжается, новую ставку не берём.
+            return _card_table_view(table)
+        bet = _luck_take_bet(uid, payload.get("bet"))
+        if bet is None:
+            raise ValueError("not enough coins")
+        state = casino.bj_new() if game == "blackjack" else casino.poker_new()
+        table = {"game": game, "bet": bet, "state": state, "session": short_id(), "win": 0}
+        webapp_tables[uid] = table
+    else:
+        if not table or table["game"] != game:
+            raise ValueError("no active hand")
+        state = table["state"]
+        if game == "blackjack" and action in ("hit", "stand"):
+            (casino.bj_hit if action == "hit" else casino.bj_stand)(state)
+        elif game == "poker" and action in ("next", "fold"):
+            (casino.poker_next if action == "next" else casino.poker_fold)(state)
+        else:
+            raise ValueError("unknown action")
+    state = table["state"]
+    if state["status"] != "playing" and not table.get("settled"):
+        table["settled"] = True
+        table["win"] = _luck_settle(uid, game, table["bet"], state["result"], table["session"])
+    return _card_table_view(table)
+
+
+def _card_table_view(table):
+    state = table["state"]
+    view = casino.bj_public(state) if table["game"] == "blackjack" else casino.poker_public(state)
+    view.update(bet=table["bet"], win=table.get("win", 0))
+    return {"table": view}
 
 
 webapp_server = create_webapp(
@@ -11964,6 +12252,13 @@ webapp_server = create_webapp(
     profile_provider=_webapp_profile,
     result_handler=_webapp_apply_result,
     allow_unsigned=WEBAPP_ALLOW_UNSIGNED,
+    actions={
+        "luck": _webapp_luck,
+        "records": _webapp_records,
+        "shop": _webapp_shop,
+        "season": _webapp_season,
+        "gift": _webapp_gift,
+    },
 )
 
 

@@ -527,3 +527,202 @@ canvas {
   --muted: #6b7c8f;
   --shadow: 0 8px 22px rgba(16, 32, 48, .1);
 }
+
+/* ======================= 2.0: вкладки, события, магазин, сезон ======================= */
+
+body.with-tabs main {
+  padding-bottom: calc(86px + var(--safe-bottom, 0px) + env(safe-area-inset-bottom, 0px));
+}
+
+.tabs {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding: 6px 8px calc(6px + var(--safe-bottom, 0px) + env(safe-area-inset-bottom, 0px));
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--line);
+}
+.tabs[hidden] { display: none; }
+.tabs button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 600 11px/1.2 inherit;
+  padding: 6px 0;
+  border-radius: 12px;
+  transition: color .2s, background .2s;
+}
+.tabs button span { font-size: 21px; line-height: 1; transition: transform .25s var(--ease); }
+.tabs button.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tabs button.active span { transform: translateY(-1px) scale(1.12); }
+
+.coins.pumpkins { background: linear-gradient(180deg, #3a2414, #26170c); border-color: rgba(255, 150, 50, .35); color: #ffb35c; }
+
+/* аватар с рамкой */
+.hero .avatar { position: relative; }
+.avatar .decor {
+  position: absolute;
+  font-style: normal;
+  font-size: 15px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .4));
+}
+.avatar .decor.left { left: -7px; top: -7px; }
+.avatar .decor.right { right: -7px; bottom: -7px; }
+.avatar.frame-gold { box-shadow: 0 0 0 2px #e8b93f, 0 0 16px rgba(232, 185, 63, .45); }
+.avatar.frame-neon { box-shadow: 0 0 0 2px #4ef0e1, 0 0 18px rgba(78, 240, 225, .5); }
+.avatar.frame-web { box-shadow: 0 0 0 2px #9a9a9a, 0 0 14px rgba(255, 140, 40, .35); }
+.avatar.frame-anniversary { box-shadow: 0 0 0 2px #ff8fb3, 0 0 18px rgba(255, 143, 179, .5); }
+.avatar.frame-news { box-shadow: 0 0 0 2px var(--accent); }
+.hero .titles { font-size: 12px; color: var(--warn); margin-top: 2px; }
+
+/* баннеры событий */
+.banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--card);
+  animation: view-in .4s var(--ease);
+}
+.banner-icon { font-size: 30px; }
+.banner-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.banner-body span { font-size: 13px; color: var(--muted); }
+.banner > div:last-child:not(.banner-body) { flex-basis: 100%; }
+.banner.spooky { background: linear-gradient(135deg, #2a1608, #3d1f0a 60%, #1d1030); border-color: rgba(255, 140, 40, .35); }
+.banner.spooky .banner-body span { color: #f3c79a; }
+.banner.party { background: linear-gradient(135deg, #3a1450, #6a2b6f 55%, #8a3f5c); border-color: rgba(255, 143, 179, .4); }
+.banner.party .banner-body span { color: #ffd2e4; }
+.banner.season { background: linear-gradient(135deg, #14244a, #27306f); border-color: rgba(120, 160, 255, .35); cursor: pointer; }
+.banner.season .banner-body span { color: #c6d4ff; }
+
+.btn.small { padding: 9px 14px; font-size: 14px; border-radius: 11px; }
+.btn:disabled { opacity: .55; }
+
+/* ставки */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 14px 0 4px; }
+.chips[hidden] { display: none; }
+.chip {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font: 650 14px/1 inherit;
+  padding: 9px 12px;
+  border-radius: 999px;
+  transition: transform .15s, background .2s, border-color .2s;
+}
+.chip.on { background: color-mix(in srgb, var(--warn) 22%, var(--card)); border-color: var(--warn); color: var(--warn); }
+.chip:disabled { opacity: .35; }
+.chip:active { transform: scale(.94); }
+
+.coin-face {
+  font-size: 84px;
+  text-align: center;
+  margin: 12px 0 4px;
+  filter: drop-shadow(0 8px 18px rgba(232, 185, 63, .35));
+}
+.coin-face.flip { animation: coin-flip .65s var(--ease) infinite; }
+@keyframes coin-flip {
+  0% { transform: rotateY(0) translateY(0); }
+  50% { transform: rotateY(540deg) translateY(-28px); }
+  100% { transform: rotateY(1080deg) translateY(0); }
+}
+
+/* списки: рекорды, любимые игры, топы */
+.list { display: flex; flex-direction: column; gap: 8px; }
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.list-row b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.list-row.me { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
+.tile .played.record { color: var(--warn); }
+
+.record-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font: 650 14px/1.2 inherit;
+}
+
+/* магазин */
+.grid.shop { grid-template-columns: repeat(2, 1fr); }
+.shop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--card);
+  text-align: center;
+}
+.shop-card b { font-size: 14px; }
+.shop-card .btn { margin-top: 8px; width: 100%; }
+.shop-card.worn { border-color: var(--good); box-shadow: 0 0 0 1px var(--good) inset; }
+.shop-preview { font-size: 38px; line-height: 1.2; }
+
+/* сезонный пропуск */
+.season-head { display: flex; align-items: center; gap: 14px; }
+.season-level {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #f6b93b, #e55e8f);
+  box-shadow: 0 6px 18px rgba(229, 94, 143, .35);
+}
+.levels { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.level {
+  display: grid;
+  grid-template-columns: 34px 1fr 24px;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+.level-num { font-weight: 800; text-align: center; color: var(--muted); }
+.level.ready { border-color: var(--warn); }
+.level.ready .level-num { color: var(--warn); }
+.level.claimed { opacity: .6; }
+.level.locked .level-reward { color: var(--muted); }
+.level.special .level-num::after { content: "⭐"; font-size: 10px; vertical-align: super; }

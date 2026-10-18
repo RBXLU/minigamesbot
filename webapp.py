@@ -45,9 +45,12 @@ def verify_init_data(init_data, bot_token, max_age=INIT_DATA_MAX_AGE):
     return user if user.get("id") else None
 
 
-def create_app(bot_token, dataset_provider, profile_provider, result_handler, allow_unsigned=False):
+def create_app(bot_token, dataset_provider, profile_provider, result_handler, allow_unsigned=False,
+               actions=None):
     """dataset_provider() -> словари игр, profile_provider(uid) -> профиль,
-    result_handler(uid, payload) -> обновлённый профиль."""
+    result_handler(uid, payload) -> обновлённый профиль,
+    actions: {имя: handler(uid, user, payload)} для /api/action/<имя>."""
+    actions = actions or {}
     app = Flask(__name__, static_folder=None)
 
     def _current_user():
@@ -95,6 +98,20 @@ def create_app(bot_token, dataset_provider, profile_provider, result_handler, al
         try:
             return jsonify(result_handler(user["id"], user, payload))
         except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.route("/api/action/<name>", methods=["POST"])
+    def api_action(name):
+        handler = actions.get(name)
+        if handler is None:
+            return jsonify({"error": "unknown action"}), 404
+        user = _current_user()
+        if not user or user.get("unsigned"):
+            # Действия меняют баланс — гостю без подписи Telegram они недоступны.
+            return jsonify({"error": "unauthorized"}), 401
+        try:
+            return jsonify(handler(user["id"], user, request.json or {}))
+        except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
     return app
