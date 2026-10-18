@@ -43,6 +43,7 @@ from core import events as ev
 from room_games import (
     ROOM_VOTE_GAMES,
     cleanup_room_runtime_state,
+    configure_room_game_events,
     configure_room_game_persistence,
     is_room_game,
     remove_room_game_player,
@@ -1310,6 +1311,9 @@ def _set_user_ban(admin_id, target_user_id, is_banned, reason=""):
 
 
 def _persist_room_runtime_state(code, runtime_state):
+    if _is_group_code(code):
+        # Партии в обычных группах живут только в памяти — читать базу незачем.
+        return
     d, rooms = _rooms_get_data()
     room = rooms.get("active", {}).get(code)
     if not isinstance(room, dict):
@@ -11449,6 +11453,205 @@ def admin_wait_input(message):
         bot.send_message(uid, f"✅ Пользователь {target} разбанен.")
         return
 
+# ---------------------------------------------------------------------------
+# Бот в любой группе
+#
+# Комнаты из пула — ваши служебные группы: при закрытии бот переименовывает
+# их, выгоняет участников и чистит сообщения. В обычной группе пользователя
+# ничего из этого делать нельзя, поэтому у групповых партий свой код «G…»,
+# своё хранение в памяти и никаких действий над самим чатом.
+# ---------------------------------------------------------------------------
+GROUP_LAUNCH_COOLDOWN = 10
+group_sessions = BoundedGames()     # код партии -> chat_id
+_group_last_launch = {}
+_room_chats_cache = {"at": 0.0, "ids": frozenset()}
+
+
+def _is_group_code(code):
+    code = str(code or "")
+    return code.startswith("G") and len(code) > ROOM_CODE_LEN
+
+
+def _group_code():
+    return "G" + format(int(time.time() * 1000), "x") + format(random.randint(0, 255), "02x")
+
+
+def _room_chat_ids():
+    """chat_id комнат из пула; кэш на 30 секунд вместо чтения базы на каждое сообщение."""
+    now = time.time()
+    if now - _room_chats_cache["at"] > 30:
+        rooms = read_state_key("rooms", {}, db_path=DB_FILE) or {}
+        active = rooms.get("active") if isinstance(rooms.get("active"), dict) else {}
+        ids = {room.get("chat_id") for room in active.values() if isinstance(room, dict)}
+        _room_chats_cache.update(at=now, ids=frozenset(ids))
+    return _room_chats_cache["ids"]
+
+
+def _group_note_activity(uid, chat_id):
+    """Счётчик партий игрока в конкретном чате — для /top этого чата."""
+    with user_record(uid) as rec:
+        groups = rec.get("groups")
+        if not isinstance(groups, dict):
+            groups = rec["groups"] = {}
+        key = str(chat_id)
+        groups[key] = int(groups.get(key, 0) or 0) + 1
+        if len(groups) > 50:
+            for old in sorted(groups, key=groups.get)[: len(groups) - 50]:
+                groups.pop(old, None)
+
+
+def _group_game_join(code, game_key, user):
+    """Игрок вошёл в групповую партию: засчитываем её, если он уже пользуется ботом.
+
+    Запись для каждого участника чата не заводим: иначе человек, впервые
+    сыгравший в группе, перестал бы считаться новым для реферальной ссылки.
+    """
+    if not _is_group_code(code) or not user_exists(user.id, db_path=DB_FILE):
+        return
+    name = user.first_name or user.username or str(user.id)
+    _record_game_play_once(user.id, game_key, f"group:{code}", display_name=name)
+    chat_id = group_sessions.get(code)
+    if chat_id:
+        _group_note_activity(user.id, chat_id)
+
+
+configure_room_game_events(on_join=_group_game_join)
+
+
+def _group_menu_text():
+    return (
+        "🎮 <b>Игры в этом чате</b>\n"
+        "Выберите игру — бот запустит её прямо здесь, присоединиться может любой.\n\n"
+        f"Ещё 25 игр — наберите <code>@{INLINE_BOT_USERNAME}</code> в строке сообщения.\n"
+        "🏆 Лучшие игроки чата — /top"
+    )
+
+
+def _group_menu_kb():
+    kb = types.InlineKeyboardMarkup()
+    buttons = [types.InlineKeyboardButton(title, callback_data=f"grp_play_{key}") for key, title in ROOM_VOTE_GAMES]
+    for i in range(0, len(buttons), 2):
+        kb.row(*buttons[i:i + 2])
+    kb.add(types.InlineKeyboardButton("🎯 Все игры через @-меню", switch_inline_query_current_chat=""))
+    kb.add(types.InlineKeyboardButton("🏆 Топ чата", callback_data="grp_top"))
+    return kb
+
+
+def _group_top_text(chat_id):
+    key = str(chat_id)
+    rows = []
+    for uid_str, rec in load_data().get("users", {}).items():
+        if not isinstance(rec, dict):
+            continue
+        played = int(((rec.get("groups") or {}).get(key)) or 0) if isinstance(rec.get("groups"), dict) else 0
+        if played > 0:
+            rows.append((played, str(rec.get("display_name") or f"user_{uid_str}")))
+    rows.sort(key=lambda row: (-row[0], row[1].lower()))
+    lines = ["🏆 <b>Лучшие игроки чата</b>", ""]
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for place, (played, name) in enumerate(rows[:10], 1):
+        lines.append(f"{medals.get(place, f'{place}.')} {html.escape(name)} — {played}")
+    if not rows:
+        lines.append("Здесь ещё никто не играл. Откройте /games и станьте первым!")
+    lines += ["", "Считаются игры из /games этого чата у тех, кто запускал бота."]
+    return "\n".join(lines)
+
+
+def _send_group_menu(chat_id):
+    bot.send_message(chat_id, _group_menu_text(), parse_mode="HTML", reply_markup=_group_menu_kb())
+
+
+@bot.message_handler(commands=["games", "play"])
+def games_cmd(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="games", require_subscription=False):
+        return
+    if message.chat.type in ("group", "supergroup"):
+        _send_group_menu(message.chat.id)
+    else:
+        show_games_menu(message.chat.id, uid)
+
+
+@bot.message_handler(commands=["top"])
+def top_cmd(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="top", require_subscription=False):
+        return
+    if message.chat.type in ("group", "supergroup"):
+        bot.send_message(message.chat.id, _group_top_text(message.chat.id), parse_mode="HTML")
+    else:
+        bot.send_message(message.chat.id, _render_leaderboard_text(uid))
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("grp_"))
+def group_callbacks(call):
+    uid = call.from_user.id
+    try:
+        chat = call.message.chat if call.message else None
+        if not chat or chat.type not in ("group", "supergroup"):
+            bot.answer_callback_query(call.id, "Эта кнопка работает в группе")
+            return
+        if call.data == "grp_menu":
+            bot.answer_callback_query(call.id)
+            _send_group_menu(chat.id)
+        elif call.data == "grp_top":
+            bot.answer_callback_query(call.id)
+            bot.send_message(chat.id, _group_top_text(chat.id), parse_mode="HTML")
+        elif call.data.startswith("grp_play_"):
+            game_key = call.data[len("grp_play_"):]
+            if not is_room_game(game_key):
+                bot.answer_callback_query(call.id, "Такой игры нет")
+                return
+            now = time.time()
+            if now - _group_last_launch.get(chat.id, 0) < GROUP_LAUNCH_COOLDOWN:
+                bot.answer_callback_query(call.id, "Игра только что запущена — присоединяйтесь к ней выше")
+                return
+            _group_last_launch[chat.id] = now
+            code = _group_code()
+            group_sessions[code] = chat.id
+            bot.answer_callback_query(call.id, "Запускаю!")
+            room_game_launch(bot, chat.id, code, {"game": game_key})
+        else:
+            bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("group_callbacks", e, user_id=uid)
+        bot.answer_callback_query(call.id, "Ошибка запуска")
+
+
+@bot.my_chat_member_handler()
+def bot_membership_changed(update):
+    """Бота добавили в группу или дали ему права администратора."""
+    try:
+        chat = update.chat
+        if chat.type not in ("group", "supergroup"):
+            return
+        old = update.old_chat_member.status
+        new = update.new_chat_member.status
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🎮 Игры", callback_data="grp_menu"))
+        if old in ("left", "kicked") and new in ("member", "administrator"):
+            admin_note = (
+                "✅ Права администратора уже есть — работает всё."
+                if new == "administrator"
+                else "⚙️ Чтобы работало всё (морской бой ходами в чате, охота на тыквы 🎃), "
+                     "сделайте меня администратором: мне нужно видеть сообщения."
+            )
+            bot.send_message(
+                chat.id,
+                "👋 Привет! Я MiniGames — играйте прямо в этом чате.\n\n"
+                "• /games — игры для всей группы\n"
+                f"• @{INLINE_BOT_USERNAME} в строке сообщения — ещё 25 игр\n"
+                "• /top — лучшие игроки чата\n\n"
+                f"{admin_note}\n"
+                "Я не переименовываю чат, не удаляю чужие сообщения и никого не выгоняю.",
+                reply_markup=kb,
+            )
+        elif old == "member" and new == "administrator":
+            bot.send_message(chat.id, "✅ Спасибо! Теперь я вижу сообщения: морской бой и охота на тыквы 🎃 работают.")
+    except Exception as e:
+        log_exception("bot_membership_changed", e)
+
+
 # Охота на тыквы: в оживлённый групповой чат иногда выкатывается тыква,
 # первый нажавший её забирает. Не чаще раза в PUMPKIN_HUNT_COOLDOWN на чат,
 # а неподобранная тыква исчезает вместе с прочими брошенными сессиями.
@@ -11518,6 +11721,8 @@ def room_track_messages(message):
     except Exception as e:
         log_exception("maybe_drop_pumpkin", e)
     try:
+        if message.chat.id not in _room_chat_ids():
+            return
         d, rooms = _rooms_get_data()
         code, room = _room_find_by_chat(rooms, message.chat.id)
         if not room:

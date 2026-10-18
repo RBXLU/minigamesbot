@@ -25,6 +25,7 @@ _ALL_ROOM_STATES = (
     _room_quiz_state, _room_combo_state, _room_mafia_state,
 )
 _room_state_persist_callback = None
+_room_join_callback = None
 
 
 def _jsonable(value):
@@ -35,6 +36,21 @@ def _jsonable(value):
     if isinstance(value, list):
         return [_jsonable(v) for v in value]
     return value
+
+
+def configure_room_game_events(on_join=None):
+    """on_join(code, game_key, user) — игрок присоединился к партии."""
+    global _room_join_callback
+    _room_join_callback = on_join
+
+
+def _notify_join(code, game_key, user):
+    if not _room_join_callback:
+        return
+    try:
+        _room_join_callback(code, game_key, user)
+    except Exception:
+        pass
 
 
 def configure_room_game_persistence(callback):
@@ -231,6 +247,7 @@ def register_room_game_handlers(bot):
             bot.answer_callback_query(call.id, "В игре уже 2 игрока.")
             return
         st["players"].append(uid)
+        _notify_join(code, "room_rps", call.from_user)
         bot.answer_callback_query(call.id, "Вы в игре!")
         _persist_room_state(code)
         if len(st["players"]) == 2:
@@ -301,6 +318,7 @@ def register_room_game_handlers(bot):
             bot.answer_callback_query(call.id, "В дуэли уже 2 игрока.")
             return
         st["players"].append(uid)
+        _notify_join(code, "room_duel", call.from_user)
         st["names"][uid] = _display_name(call.from_user)
         st["scores"][uid] = 0
         bot.answer_callback_query(call.id, "Вы в дуэли!")
@@ -407,6 +425,7 @@ def register_room_game_handlers(bot):
             bot.answer_callback_query(call.id, "В игре уже 2 игрока.")
             return
         st["players"].append(uid)
+        _notify_join(code, "room_bship", call.from_user)
         st["names"][uid] = _display_name(call.from_user)
         bot.answer_callback_query(call.id, "Вы в игре!")
         _persist_room_state(code)
@@ -423,6 +442,7 @@ def register_room_game_handlers(bot):
         )
         uid = call.from_user.id
         st["players"].add(uid)
+        _notify_join(code, "room_quiz", call.from_user)
         st["names"][uid] = _display_name(call.from_user)
         st["scores"].setdefault(uid, 0)
         bot.answer_callback_query(call.id, "Вы в викторине!")
@@ -487,6 +507,7 @@ def register_room_game_handlers(bot):
             bot.answer_callback_query(call.id, "В игре уже 2 игрока.")
             return
         st["players"].append(uid)
+        _notify_join(code, "room_combo", call.from_user)
         st["names"][uid] = _display_name(call.from_user)
         bot.answer_callback_query(call.id, "Вы в игре!")
         _persist_room_state(code)
@@ -529,6 +550,7 @@ def register_room_game_handlers(bot):
         )
         uid = call.from_user.id
         st["players"].add(uid)
+        _notify_join(code, "room_mafia", call.from_user)
         st["names"][uid] = _display_name(call.from_user)
         bot.answer_callback_query(call.id, "Вы в мафии!")
         _persist_room_state(code)
