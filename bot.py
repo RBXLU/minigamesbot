@@ -1409,23 +1409,16 @@ def update_user_streak(user_id, display_name=None):
     return cur
 
 def get_user(uid):
-    data = load_data()
-    users = data["users"]
     today = date.today().isoformat()
-
-    if not isinstance(users.get(str(uid)), dict):
-        users[str(uid)] = {}
-
-    user = users[str(uid)]
-    user.setdefault("premium_until", 0)
-    if not isinstance(user.get("pending"), dict):
-        user["pending"] = {}
-    if user.get("date") != today:
-        user["date"] = today
-        user["count"] = 0
-    user.setdefault("count", 0)
-
-    save_data(data)
+    with user_record(uid) as user:
+        if user.get("premium_until") is None:
+            user["premium_until"] = 0
+        if not isinstance(user.get("pending"), dict):
+            user["pending"] = {}
+        if user.get("date") != today:
+            user["date"] = today
+            user["count"] = 0
+        user.setdefault("count", 0)
     return user
 
 GAME_TITLES = {**GAME_TITLES_LANG["ru"], "poker": "Покер"}
@@ -2629,7 +2622,8 @@ def _track_callback_game_play(call):
         log_exception("track_callback_game_play", e)
 
 def _load_profile(uid):
-    user = _ensure_profile_fields(load_data().get("users", {}).get(str(uid)) or {})
+    # Профиль, хаб и Mini App открываются часто: читаем одну запись, не всю базу.
+    user = _ensure_profile_fields(load_user_record(uid))
     return user, user["achievements"]
 
 
@@ -3108,7 +3102,7 @@ def _shop_items_kb(uid):
 
 def has_premium(uid):
     user = get_user(uid)
-    return user["premium_until"] > time.time()
+    return float(user.get("premium_until") or 0) > time.time()
 
 def can_use_ai(uid):
     user = get_user(uid)
@@ -5420,12 +5414,9 @@ def mafia_resolve_day(game):
 
 
 def _complete_onboarding(uid):
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(uid), {})
-    rec = _ensure_profile_fields(rec)
-    rec["onboarding_completed"] = True
-    d["users"][str(uid)] = rec
-    save_data(d)
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        rec["onboarding_completed"] = True
 
 
 def _send_home_menu(message):
@@ -5433,12 +5424,11 @@ def _send_home_menu(message):
     display_name = message.from_user.first_name or message.from_user.username or str(uid)
     update_user_streak(uid, display_name)
 
-    user = get_user(uid)
-    data = load_data()
-    data["users"][str(uid)]["started"] = True
-    data["users"][str(uid)].pop("bot_blocked", None)
-    data["users"][str(uid)]["display_name"] = display_name[:64]
-    save_data(data)
+    get_user(uid)
+    with user_record(uid) as rec:
+        rec["started"] = True
+        rec.pop("bot_blocked", None)
+        rec["display_name"] = display_name[:64]
 
     if REQUIRED_CHANNEL and not is_user_subscribed(uid):
         bot.send_message(
@@ -5450,8 +5440,7 @@ def _send_home_menu(message):
 
     show_main_menu(message.chat.id, uid)
 
-    d2 = load_data()
-    rec = _ensure_profile_fields(d2.setdefault("users", {}).setdefault(str(uid), {}))
+    rec = _ensure_profile_fields(load_user_record(uid))
     if not rec.get("onboarding_completed"):
         bot.send_message(message.chat.id, _render_onboarding_text(uid))
         _complete_onboarding(uid)
@@ -12205,11 +12194,10 @@ def _webapp_gift(uid, tg_user, payload):
 
 def _remember_display_name(user_id, tg_user):
     name = (tg_user.get("first_name") or tg_user.get("username") or str(user_id))[:64]
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(user_id), {})
-    if rec.get("display_name") != name:
+    if load_user_record(user_id).get("display_name") == name:
+        return
+    with user_record(user_id) as rec:
         rec["display_name"] = name
-        save_data(d)
 
 
 # Итог партии в Mini App сообщает сам клиент, а подписанный initData игрок
