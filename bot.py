@@ -5153,6 +5153,7 @@ def _send_home_menu(message):
     user = get_user(uid)
     data = load_data()
     data["users"][str(uid)]["started"] = True
+    data["users"][str(uid)].pop("bot_blocked", None)
     data["users"][str(uid)]["display_name"] = display_name[:64]
     save_data(data)
 
@@ -5357,6 +5358,95 @@ def _admin_panel_kb():
     kb.add(types.InlineKeyboardButton("🏆 Достижения", callback_data="admin_achievements"))
     kb.add(types.InlineKeyboardButton("📣 Рассылка", callback_data="admin_broadcast"))
     return kb
+
+# Рассылка всем пользователям. Telegram пускает около 30 сообщений в секунду
+# на бота и при превышении отвечает 429 с retry_after; заблокировавшие бота
+# отвечают 403 — их помечаем, чтобы следующая рассылка на них не тратилась.
+BROADCAST_RATE = float(os.getenv("BROADCAST_RATE", "25"))
+_broadcast_lock = threading.Lock()
+
+
+def _broadcast_targets():
+    targets = []
+    for uid_str, info in load_data().get("users", {}).items():
+        if not uid_str.isdigit() or not isinstance(info, dict):
+            continue
+        if info.get("started") and not info.get("bot_blocked") and not info.get("is_banned"):
+            targets.append(int(uid_str))
+    return targets
+
+
+def _broadcast_send_one(dest, text, reply_markup):
+    """'sent', 'blocked' или 'failed'; на 429 ждёт и повторяет."""
+    for _ in range(3):
+        try:
+            bot.send_message(dest, text, reply_markup=reply_markup)
+            return "sent"
+        except ApiTelegramException as e:
+            code = getattr(e, "error_code", None)
+            if code == 429:
+                retry = 5
+                try:
+                    retry = int((e.result_json or {}).get("parameters", {}).get("retry_after", 5))
+                except Exception:
+                    pass
+                time.sleep(retry + 1)
+                continue
+            if code == 403 or "chat not found" in str(e).lower():
+                return "blocked"
+            return "failed"
+        except Exception:
+            return "failed"
+    return "failed"
+
+
+def start_broadcast(admin_id, text, markup_factory=lambda: None, check_subscription=True):
+    """Запускает рассылку в фоне; False, если другая ещё идёт."""
+    if not _broadcast_lock.acquire(blocking=False):
+        return False
+    Thread(
+        target=_run_broadcast, args=(admin_id, text, markup_factory, check_subscription),
+        daemon=True, name="broadcast",
+    ).start()
+    return True
+
+
+def _run_broadcast(admin_id, text, markup_factory, check_subscription=True):
+    """Выполняется под _broadcast_lock, который взял start_broadcast."""
+    try:
+        targets = _broadcast_targets()
+        stats = {"sent": 0, "blocked": 0, "failed": 0, "skipped": 0}
+        delay = 1.0 / max(BROADCAST_RATE, 1.0)
+        bot.send_message(admin_id, f"📣 Рассылка началась: {len(targets)} получателей.")
+        for index, dest in enumerate(targets, 1):
+            if check_subscription and REQUIRED_CHANNEL and not is_user_subscribed(dest):
+                stats["skipped"] += 1
+                continue
+            result = _broadcast_send_one(dest, text, markup_factory())
+            stats[result] += 1
+            if result == "blocked":
+                try:
+                    with user_record(dest) as rec:
+                        rec["bot_blocked"] = True
+                except Exception as e:
+                    log_exception("broadcast_mark_blocked", e)
+            if index % 200 == 0:
+                bot.send_message(admin_id, f"📣 {index}/{len(targets)}: доставлено {stats['sent']}")
+            time.sleep(delay)
+        bot.send_message(
+            admin_id,
+            "✅ Рассылка завершена.\n"
+            f"Доставлено: {stats['sent']}\n"
+            f"Заблокировали бота: {stats['blocked']}\n"
+            f"Без подписки на канал: {stats['skipped']}\n"
+            f"Ошибки: {stats['failed']}",
+        )
+        return stats
+    except Exception as e:
+        log_exception("run_broadcast", e)
+    finally:
+        _broadcast_lock.release()
+
 
 def _broadcast_menu_kb():
     kb = types.InlineKeyboardMarkup()
@@ -5652,36 +5742,26 @@ def messagenot_callback(call):
             bot.answer_callback_query(call.id)
             return
         if action == "send":
-            bot.answer_callback_query(call.id, "Запускаю отправку...")
-            d = load_data()
-            users = d.get("users", {})
-            sent = 0
-            skipped = 0
-            for uid_str, info in users.items():
-                try:
-                    dest = int(uid_str)
-                    if not info.get("started"):
-                        skipped += 1
-                        continue
-                    if REQUIRED_CHANNEL and not is_user_subscribed(dest):
-                        skipped += 1
-                        continue
-                    btn_type = BROADCAST_SETTINGS.get("btn_type")
-                    if btn_type == "link":
-                        kb = types.InlineKeyboardMarkup()
-                        kb.add(types.InlineKeyboardButton(BROADCAST_SETTINGS.get("btn_text","Открыть"), url=BROADCAST_SETTINGS.get("btn_link")))
-                        bot.send_message(dest, BROADCAST_SETTINGS.get("msg", ""), reply_markup=kb)
-                    elif btn_type == "callback":
-                        kb = types.InlineKeyboardMarkup()
-                        kb.add(types.InlineKeyboardButton(BROADCAST_SETTINGS.get("btn_text","Открыть"), callback_data="broadcast_open"))
-                        bot.send_message(dest, BROADCAST_SETTINGS.get("msg", ""), reply_markup=kb)
-                    else:
-                        bot.send_message(dest, BROADCAST_SETTINGS.get("msg", ""))
-                    sent += 1
-                    time.sleep(0.05)
-                except Exception:
-                    skipped += 1
-            bot.send_message(uid, f"Готово. Доставлено: {sent}, пропущено: {skipped}")
+            text = BROADCAST_SETTINGS.get("msg", "")
+            btn_type = BROADCAST_SETTINGS.get("btn_type")
+            btn_text = BROADCAST_SETTINGS.get("btn_text", "Открыть")
+            btn_link = BROADCAST_SETTINGS.get("btn_link")
+
+            def markup():
+                if btn_type == "link":
+                    kb = types.InlineKeyboardMarkup()
+                    kb.add(types.InlineKeyboardButton(btn_text, url=btn_link))
+                    return kb
+                if btn_type == "callback":
+                    kb = types.InlineKeyboardMarkup()
+                    kb.add(types.InlineKeyboardButton(btn_text, callback_data="broadcast_open"))
+                    return kb
+                return None
+
+            if start_broadcast(uid, text, markup):
+                bot.answer_callback_query(call.id, "Запускаю отправку...")
+            else:
+                bot.answer_callback_query(call.id, "Рассылка уже идёт", show_alert=True)
             return
     except Exception as e:
         log_exception("messagenot", e)
