@@ -1140,11 +1140,21 @@ def _describe_update(kind, obj):
 
 
 _original_process_new_updates = bot.process_new_updates
+# Счётчик нажатий всех игроков: кнопки в инлайн-сообщениях и в обычных.
+# Раз в 10 минут уходит в лог — видно, доходят ли инлайн-нажатия вообще.
+_update_counts = {"inline_callback": 0, "chat_callback": 0, "inline_query": 0, "chosen": 0}
 
 
 def _process_new_updates_traced(updates):
     for update in updates:
         try:
+            callback = update.callback_query
+            if callback is not None:
+                _update_counts["inline_callback" if callback.inline_message_id else "chat_callback"] += 1
+            elif update.inline_query is not None:
+                _update_counts["inline_query"] += 1
+            elif update.chosen_inline_result is not None:
+                _update_counts["chosen"] += 1
             kind, obj = _update_trace_target(update)
             if kind:
                 LOGGER.info("[trace] получено: %s", _describe_update(kind, obj))
@@ -3084,7 +3094,15 @@ def _room_close(code, reason=""):
 
 def _games_watchdog(interval=60):
     """Раз в минуту выгружает партии, которые создались и остались без игрока."""
+    ticks = 0
     while not _shutdown_event.wait(interval):
+        ticks += 1
+        if ticks % 10 == 0:
+            counts = dict(_update_counts)
+            for key in _update_counts:
+                _update_counts[key] = 0
+            LOGGER.info("[trace] за 10 мин: инлайн-запросов %(inline_query)s, отправлено игр %(chosen)s, "
+                        "нажатий в инлайн-сообщениях %(inline_callback)s, в чатах %(chat_callback)s", counts)
         try:
             dropped = sum(store.sweep() for store in _GAME_STORES)
             if dropped:
