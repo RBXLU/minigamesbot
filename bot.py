@@ -11,6 +11,7 @@ import sys
 from itertools import combinations
 from collections import OrderedDict
 from contextlib import contextmanager
+import functools
 from threading import Thread
 import html
 import json
@@ -576,7 +577,9 @@ def get_game_description(user_id, game_key):
 
 
 TOKEN = _require_env("TELEGRAM_TOKEN")
-bot = telebot.TeleBot(TOKEN)
+# Два воркера по умолчанию: одна долгая операция (ИИ, анимация) — и все
+# остальные нажатия ждут в очереди.
+bot = telebot.TeleBot(TOKEN, num_threads=max(2, int(os.getenv("BOT_WORKER_THREADS", "4"))))
 try:
     INLINE_BOT_USERNAME = bot.get_me().username or "minigamesisbot"
     bot.delete_webhook()
@@ -1111,6 +1114,69 @@ def _is_bot_admin(user_id):
 
 def _is_support_admin(uid):
     return int(uid) in SUPPORT_ADMIN_IDS or _is_bot_admin(uid)
+
+
+# Трассировка апдейтов администраторов: видно, дошло ли нажатие до бота,
+# каким обработчиком оно разобрано и сколько это заняло. Обычных игроков
+# не пишем — лог не раздувается.
+def _update_trace_target(update):
+    for kind in ("callback_query", "inline_query", "chosen_inline_result", "message"):
+        obj = getattr(update, kind, None)
+        if obj is not None and getattr(obj, "from_user", None) and _is_bot_admin(obj.from_user.id):
+            return kind, obj
+    return None, None
+
+
+def _describe_update(kind, obj):
+    if kind == "callback_query":
+        where = f"inline={obj.inline_message_id}" if obj.inline_message_id else (
+            f"chat={obj.message.chat.id}" if obj.message else "no-message")
+        return f"callback uid={obj.from_user.id} data={obj.data!r} {where}"
+    if kind == "inline_query":
+        return f"inline_query uid={obj.from_user.id} query={obj.query!r}"
+    if kind == "chosen_inline_result":
+        return f"chosen uid={obj.from_user.id} result={obj.result_id!r}"
+    return f"message uid={obj.from_user.id} chat={obj.chat.id} text={(obj.text or '')[:40]!r}"
+
+
+_original_process_new_updates = bot.process_new_updates
+
+
+def _process_new_updates_traced(updates):
+    for update in updates:
+        try:
+            kind, obj = _update_trace_target(update)
+            if kind:
+                LOGGER.info("[trace] получено: %s", _describe_update(kind, obj))
+        except Exception:
+            pass
+    return _original_process_new_updates(updates)
+
+
+bot.process_new_updates = _process_new_updates_traced
+
+
+def _traced_handler(func):
+    @functools.wraps(func)
+    def inner(obj, *args, **kwargs):
+        user = getattr(obj, "from_user", None)
+        if not user or not _is_bot_admin(user.id):
+            return func(obj, *args, **kwargs)
+        started = time.monotonic()
+        try:
+            return func(obj, *args, **kwargs)
+        except Exception:
+            LOGGER.exception("[trace] %s упал", func.__name__)
+            raise
+        finally:
+            LOGGER.info("[trace] %s: %.0f мс", func.__name__, (time.monotonic() - started) * 1000)
+    return inner
+
+
+def _install_update_trace():
+    for handlers in (bot.callback_query_handlers, bot.inline_handlers, bot.chosen_inline_handlers):
+        for handler in handlers:
+            handler["function"] = _traced_handler(handler["function"])
 
 
 def _send_admin_alert(text):
@@ -13116,6 +13182,7 @@ if __name__ == "__main__":
     Thread(target=_games_watchdog, daemon=True).start()
     Thread(target=_event_announcer, daemon=True, name="event-announcer").start()
     _setup_webapp_menu_button()
+    _install_update_trace()
     if _DB_RECOVERY_NOTE:
         _send_admin_alert(f"⚠️ <b>База данных восстановлена при старте</b>\n{html.escape(_DB_RECOVERY_NOTE)}")
     if WEBAPP_ENABLED:
