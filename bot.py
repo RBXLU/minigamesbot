@@ -765,13 +765,26 @@ def apply_news_emoji(text):
     return updated, updated != text
 
 
+def _apply_news_emoji_as_html(text, parse_mode):
+    """Подставляет анимированные эмодзи; результат всегда в HTML.
+
+    Простой текст при этом становится HTML, поэтому его угловые скобки и
+    амперсанды экранируются заранее — иначе «/party_join <КОД>» Telegram
+    принимает за незнакомый тег и не отправляет сообщение вовсе.
+    """
+    updated_text, changed = apply_news_emoji(text)
+    if changed and parse_mode is None:
+        updated_text, _ = apply_news_emoji(html.escape(text, quote=False))
+    return updated_text, changed
+
+
 def _prepare_outgoing_text(text, kwargs):
     parse_mode = kwargs.get("parse_mode")
     if parse_mode not in (None, "HTML"):
         return text, kwargs
 
-    updated_text, changed = apply_news_emoji(text)
-    if changed and parse_mode in (None, "HTML"):
+    updated_text, changed = _apply_news_emoji_as_html(text, parse_mode)
+    if changed:
         kwargs["parse_mode"] = "HTML"
     return updated_text, kwargs
 
@@ -784,7 +797,7 @@ def _prepare_inline_message_content(content, rollback):
     if parse_mode not in (None, "HTML"):
         return content
 
-    updated_text, changed = apply_news_emoji(content.message_text)
+    updated_text, changed = _apply_news_emoji_as_html(content.message_text, parse_mode)
     if not changed:
         return content
 
@@ -3007,7 +3020,7 @@ def _games_watchdog(interval=60):
     """Раз в минуту выгружает партии, которые создались и остались без игрока."""
     while not _shutdown_event.wait(interval):
         try:
-            dropped = sum(store.sweep(GAME_JOIN_TIMEOUT) for store in _GAME_STORES)
+            dropped = sum(store.sweep() for store in _GAME_STORES)
             if dropped:
                 LOGGER.info("Выгружено партий без игроков: %s", dropped)
         except Exception as e:
@@ -3491,21 +3504,27 @@ questions = [
 # ограниченное число, вытесняя те, к которым дольше всего не обращались: активная
 # партия остаётся, пока в неё играют.
 GAME_SESSIONS_LIMIT = int(os.getenv("GAME_SESSIONS_LIMIT", "400"))
+# Сколько живёт партия, в которую ещё не заходили. Сессия рождается в момент
+# инлайн-запроса, а кнопку жмут позже: клиент Telegram показывает выдачу из
+# своего кэша, сообщение с игрой ждёт в чате друга. Пять минут здесь ломали
+# кнопки — память и так ограничена GAME_SESSIONS_LIMIT.
+GAME_PREVIEW_TTL = int(os.getenv("GAME_PREVIEW_TTL", str(6 * 3600)))
 GAME_JOIN_TIMEOUT = int(os.getenv("GAME_JOIN_TIMEOUT", "300"))
 _GAME_STORES = []
 
 
 class BoundedGames(OrderedDict):
-    __slots__ = ("_limit", "_born", "_opened")
+    __slots__ = ("_limit", "_ttl", "_born", "_opened")
 
     #: инлайн-превью читает свежую сессию тут же, при сборке ответа, — за
     #: миллисекунды. Живой игрок нажимает кнопку заметно позже, так что
     #: обращение спустя эту паузу и означает «в партию зашли».
     OPEN_AFTER = 1.0
 
-    def __init__(self, limit=None):
+    def __init__(self, limit=None, ttl=None):
         super().__init__()
         self._limit = limit or GAME_SESSIONS_LIMIT
+        self._ttl = ttl or GAME_PREVIEW_TTL
         self._born = {}
         self._opened = set()
         _GAME_STORES.append(self)
@@ -3544,8 +3563,9 @@ class BoundedGames(OrderedDict):
         self._forget(key)
         super().__delitem__(key)
 
-    def sweep(self, timeout):
+    def sweep(self, timeout=None):
         """Выгружает партии, в которые так и не зашли за отведённое время."""
+        timeout = timeout or self._ttl
         now = time.monotonic()
         stale = [
             key for key in list(self)
@@ -11796,8 +11816,8 @@ def bot_membership_changed(update):
 
 # Охота на тыквы: в оживлённый групповой чат иногда выкатывается тыква,
 # первый нажавший её забирает. Не чаще раза в PUMPKIN_HUNT_COOLDOWN на чат,
-# а неподобранная тыква исчезает вместе с прочими брошенными сессиями.
-pumpkin_drops = BoundedGames()
+# а неподобранная тыква укатывается через GAME_JOIN_TIMEOUT.
+pumpkin_drops = BoundedGames(ttl=GAME_JOIN_TIMEOUT)
 _hunt_last_drop = {}
 _hunt_lock = threading.Lock()
 
@@ -11900,14 +11920,19 @@ def _webapp_available():
     return WEBAPP_ENABLED and WEBAPP_URL.startswith("https://")
 
 
-def _webapp_keyboard_button(uid):
-    if not _webapp_available():
+def _webapp_private_chat(chat_id):
+    """Кнопки Mini App Telegram принимает только в личке: в группе с ними не уходит всё сообщение."""
+    return chat_id is None or int(chat_id) > 0
+
+
+def _webapp_keyboard_button(uid, chat_id=None):
+    if not _webapp_available() or not _webapp_private_chat(chat_id):
         return None
     return types.KeyboardButton(_webapp_title(uid), web_app=types.WebAppInfo(WEBAPP_URL))
 
 
-def _webapp_inline_button(uid, game_key=None):
-    if not _webapp_available():
+def _webapp_inline_button(uid, game_key=None, chat_id=None):
+    if not _webapp_available() or not _webapp_private_chat(chat_id):
         return None
     url = f"{WEBAPP_URL}/?game={game_key}" if game_key else WEBAPP_URL
     return types.InlineKeyboardButton(_webapp_title(uid), web_app=types.WebAppInfo(url))
@@ -11940,6 +11965,20 @@ def _setup_webapp_menu_button():
 def webapp_command(message):
     uid = message.from_user.id
     if not _guard_user(uid, chat_id=message.chat.id, action="webapp"):
+        return
+    if not _webapp_private_chat(message.chat.id) and _webapp_available():
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🎮 Открыть в боте", url=f"https://t.me/{INLINE_BOT_USERNAME}"))
+        bot.send_message(
+            message.chat.id,
+            localized_text(
+                uid,
+                "🎮 Mini App открывается в личке с ботом. В группе играйте через /games.",
+                "🎮 The Mini App opens in a private chat with the bot. In groups, play via /games.",
+                "🎮 Mini App відкривається в особистих з ботом. У групі грайте через /games.",
+            ),
+            reply_markup=kb,
+        )
         return
     button = _webapp_inline_button(uid)
     if not button:
@@ -12476,9 +12515,13 @@ def show_language_selection(chat_id):
 
 def show_main_menu(chat_id, uid):
     """Show main menu in user's language"""
+    if not _webapp_private_chat(chat_id):
+        # Личная клавиатура в группе вылезла бы у всех участников.
+        _send_group_menu(chat_id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 
-    play_button = _webapp_keyboard_button(uid)
+    play_button = _webapp_keyboard_button(uid, chat_id)
     if play_button:
         kb.add(play_button)
 
@@ -12512,7 +12555,7 @@ def show_main_menu(chat_id, uid):
     )
 
     bot.send_message(chat_id, t(uid, "main_menu"), reply_markup=kb)
-    bot.send_message(chat_id, _hub_text(uid), parse_mode="HTML", reply_markup=_hub_kb(uid))
+    bot.send_message(chat_id, _hub_text(uid), parse_mode="HTML", reply_markup=_hub_kb(uid, chat_id))
 
 
 # Карточка-хаб главного меню: профиль, прогресс, текущее событие и кнопки
@@ -12557,9 +12600,9 @@ def _hub_text(uid):
     return "\n".join(lines)
 
 
-def _hub_kb(uid):
+def _hub_kb(uid, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=2)
-    webapp_button = _webapp_inline_button(uid)
+    webapp_button = _webapp_inline_button(uid, chat_id=chat_id)
     if webapp_button:
         kb.add(webapp_button)
     if _last_game_instruction(uid):
@@ -12599,7 +12642,7 @@ def hub_callbacks(call):
     try:
         data = call.data
         if data == "hub_refresh":
-            safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid), parse_mode="HTML")
+            safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid, chat_id), parse_mode="HTML")
             bot.answer_callback_query(call.id)
         elif data == "hub_gift":
             if _claim_birthday_gift(uid):
@@ -12609,7 +12652,7 @@ def hub_callbacks(call):
                 bot.answer_callback_query(call.id, "Подарок уже у вас")
             else:
                 bot.answer_callback_query(call.id, "Праздник закончился — подарки больше не выдаются", show_alert=True)
-            safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid), parse_mode="HTML")
+            safe_edit_message(call, _hub_text(uid), reply_markup=_hub_kb(uid, chat_id), parse_mode="HTML")
         elif data == "hub_event":
             bot.answer_callback_query(call.id)
             show_halloween(chat_id, uid)
