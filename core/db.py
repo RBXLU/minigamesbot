@@ -19,6 +19,7 @@ STATE_TABLE_KEYS = {
     "rooms",
     "broadcast",
     "events",
+    "maintenance",
 }
 
 LOGGER = logging.getLogger("telegram_games_bot")

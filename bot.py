@@ -23,7 +23,7 @@ import uuid
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
-from bussines_bot import register_business_handlers
+from bussines_bot import is_business_game_trigger, register_business_handlers
 from core.db import (
     backup_database,
     checkpoint as checkpoint_database,
@@ -3019,7 +3019,8 @@ def _room_close(code, reason=""):
     return True
 
 def _games_watchdog(interval=60):
-    """Раз в минуту выгружает партии, которые создались и остались без игрока."""
+    """Раз в минуту выгружает партии, которые создались и остались без игрока,
+    и следит, доиграны ли партии во время тех. работ."""
     while not _shutdown_event.wait(interval):
         try:
             dropped = sum(store.sweep() for store in _GAME_STORES)
@@ -3027,6 +3028,10 @@ def _games_watchdog(interval=60):
                 LOGGER.info("Выгружено партий без игроков: %s", dropped)
         except Exception as e:
             log_exception("games_watchdog", e)
+        try:
+            _maintenance_watch()
+        except Exception as e:
+            log_exception("maintenance_watch", e)
 
 
 def _rooms_watchdog():
@@ -3516,24 +3521,31 @@ _GAME_STORES = []
 
 
 class BoundedGames(OrderedDict):
-    __slots__ = ("_limit", "_ttl", "_born", "_opened")
+    __slots__ = ("_limit", "_ttl", "_born", "_opened", "_seen", "previews")
 
     #: инлайн-превью читает свежую сессию тут же, при сборке ответа, — за
     #: миллисекунды. Живой игрок нажимает кнопку заметно позже, так что
     #: обращение спустя эту паузу и означает «в партию зашли».
     OPEN_AFTER = 1.0
 
-    def __init__(self, limit=None, ttl=None):
+    def __init__(self, limit=None, ttl=None, previews=True):
         super().__init__()
         self._limit = limit or GAME_SESSIONS_LIMIT
         self._ttl = ttl or GAME_PREVIEW_TTL
         self._born = {}
         self._opened = set()
+        # Когда в партию заходили последний раз. В отличие от _opened не
+        # сбрасывается, когда обработчик перезаписывает состояние партии, —
+        # по нему тех. работы отличают начатую партию от нетронутого превью.
+        self._seen = {}
+        # False — ключи хранилища не id партий из кнопок (uid, коды групп)
+        self.previews = previews
         _GAME_STORES.append(self)
 
     def _forget(self, key):
         self._born.pop(key, None)
         self._opened.discard(key)
+        self._seen.pop(key, None)
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
@@ -3547,8 +3559,10 @@ class BoundedGames(OrderedDict):
     def __getitem__(self, key):
         value = super().__getitem__(key)
         self.move_to_end(key)
-        if time.monotonic() - self._born.get(key, 0) > self.OPEN_AFTER:
+        now = time.monotonic()
+        if now - self._born.get(key, 0) > self.OPEN_AFTER:
             self._opened.add(key)
+            self._seen[key] = now
         return value
 
     def get(self, key, default=None):
@@ -3577,6 +3591,15 @@ class BoundedGames(OrderedDict):
             self.pop(key, None)
         return len(stale)
 
+    def is_preview(self, key):
+        """Партия создана (инлайн-выдачей), но в неё ещё ни разу не заходили."""
+        return key in self and key not in self._seen
+
+    def active_count(self, window):
+        """Сколько партий получали ходы за последние window секунд."""
+        cutoff = time.monotonic() - window
+        return sum(1 for ts in list(self._seen.values()) if ts >= cutoff)
+
 
 inline_ttt_games = BoundedGames()
 inline_guess_games = BoundedGames()
@@ -3589,7 +3612,7 @@ support_chat_wait = {}
 admin_wait = {}
 millionaire_games = BoundedGames()
 user_show_easter_egg = {}
-pm_flappy_games = BoundedGames()
+pm_flappy_games = BoundedGames(previews=False)
 games_2048 = {}
 games_pong = {}
 user_ai_mode = {}
@@ -5641,19 +5664,379 @@ def shop_callbacks(call):
         except Exception:
             pass
 
-def _admin_panel_kb():
+# ---------------------------------------------------------------------------
+# Технические работы
+#
+# Пока они идут, новые партии не начинаются: /start, игровые команды,
+# инлайн-режим, кнопки «присоединиться» и «новая игра», Mini App отвечают
+# заглушкой со ссылкой на канал новостей. Партии, в которые уже зашли,
+# доигрываются — их кнопки проходят как обычно. Админы бота заглушку не видят,
+# чтобы проверять работу бота.
+# ---------------------------------------------------------------------------
+MAINTENANCE_CHANNEL = (os.getenv("MAINTENANCE_CHANNEL", "").strip() or REQUIRED_CHANNEL or "@minigamesbottgk")
+# Окно, за которое партия с ходами считается идущей (сводка в админ-панели)
+MAINTENANCE_ACTIVITY_WINDOW = 600
+# Столько минут без единого хода — и админам приходит «всё доиграно»
+MAINTENANCE_QUIET_WINDOW = 300
+_maintenance = {"active": False}
+
+# Команды и кнопки клавиатуры, с которых начинается партия или меню игр
+_MAINTENANCE_COMMANDS = {
+    "start", "menu", "games", "play", "app", "flappy", "reaction",
+    "blackjack", "poker", "party", "party_join", "find",
+}
+_MAINTENANCE_TEXTS = {"🎮 Играть", "🐦 Flappy Bird", "⚡ Блиц-реакция", "🃏 Блэкджек", "💣 Сапёр", "🏠 Пати"}
+# Кнопки, которые создают партию или впускают в ещё не начатую
+_MAINTENANCE_CALLBACK_PREFIXES = (
+    "ttt_join_", "ttt_restart_", "iduel_join_", "wordgame_join_", "quizgame_join_",
+    "quizgame_start_", "quizgame_new", "combogame_join_", "bship_join_", "bship_new_",
+    "chess_join_", "chess_new_", "mafia_join_", "mafia_start_", "poker_new_", "pmttt_new_",
+    "bj_new_", "wrdl_new_", "g2048_new_", "tetris_new", "hangman_new", "minesweeper_new",
+    "reaction_begin_", "coin_flip", "slot_spin", "grp_play_", "room_continue_yes_",
+    "roomrps_join_", "roomduel_join_", "roombship_join_", "roomquiz_join_", "roomquiz_start_",
+    "roomcombo_join_", "roommafia_start_", "os_game_", "biz_coin_flip", "biz_slot_spin",
+)
+
+
+def _maintenance_load():
+    try:
+        state = read_state_key("maintenance", {}, db_path=DB_FILE)
+    except Exception as e:
+        log_exception("maintenance_load", e)
+        state = {}
+    _maintenance.clear()
+    _maintenance.update(state if isinstance(state, dict) else {})
+    _maintenance.setdefault("active", False)
+
+
+def maintenance_active():
+    return bool(_maintenance.get("active"))
+
+
+def _maintenance_applies(user_id):
+    """Заглушку видят все, кроме админов бота."""
+    return maintenance_active() and not (user_id and _is_bot_admin(user_id))
+
+
+def _maintenance_store(mutate):
+    def apply(old):
+        state = dict(old) if isinstance(old, dict) else {}
+        mutate(state)
+        return state
+    state = update_state_key("maintenance", apply, default={}, db_path=DB_FILE)
+    _maintenance.clear()
+    _maintenance.update(state)
+
+
+def _set_maintenance(admin_id, active):
+    def mutate(state):
+        state.clear()
+        state["active"] = bool(active)
+        if active:
+            state.update(since=time.time(), by=int(admin_id), note="", quiet_notified=False)
+    _maintenance_store(mutate)
+    log_admin_action(admin_id, "maintenance_on" if active else "maintenance_off", db_path=DB_FILE)
+
+
+def _set_maintenance_note(admin_id, note):
+    _maintenance_store(lambda state: state.update(note=note))
+    log_admin_action(admin_id, "maintenance_note", details={"note": note}, db_path=DB_FILE)
+
+
+def _maintenance_channel_url():
+    channel = MAINTENANCE_CHANNEL
+    return channel if channel.startswith("http") else f"https://t.me/{channel.lstrip('@')}"
+
+
+def _maintenance_note():
+    return str(_maintenance.get("note") or "").strip()
+
+
+def _maintenance_text(uid):
+    text = localized_text(
+        uid,
+        "🛠 <b>Мы на технических работах</b>\n\n"
+        "Ненадолго закрылись, чтобы сделать игры ещё лучше. Новую партию сейчас "
+        "не начать, а уже начатые можно спокойно доиграть.\n\n"
+        "Когда всё будет готово, расскажем в канале — загляните, чтобы не пропустить 👇",
+        "🛠 <b>We're doing some maintenance</b>\n\n"
+        "We've paused for a little while to make the games even better. New games "
+        "can't be started right now, but the ones already in progress can be finished.\n\n"
+        "We'll post in the channel as soon as we're back — take a look 👇",
+        "🛠 <b>У нас технічні роботи</b>\n\n"
+        "Ненадовго зачинилися, щоб зробити ігри ще кращими. Нову партію зараз "
+        "не почати, а вже розпочаті можна спокійно дограти.\n\n"
+        "Коли все буде готово, розповімо в каналі — зазирніть, щоб не пропустити 👇",
+    )
+    note = _maintenance_note()
+    if note:
+        text += "\n\n💬 " + html.escape(note)
+    return text
+
+
+def _maintenance_alert(uid):
+    """Короткий текст для всплывающего окна кнопки (Telegram режет на 200 символах)."""
+    return localized_text(
+        uid,
+        f"🛠 Идут технические работы — новую партию сейчас не начать. Новости в канале {MAINTENANCE_CHANNEL}",
+        f"🛠 Maintenance in progress — new games are paused. News in {MAINTENANCE_CHANNEL}",
+        f"🛠 Тривають технічні роботи — нову партію зараз не почати. Новини в каналі {MAINTENANCE_CHANNEL}",
+    )[:200]
+
+
+def _maintenance_kb(uid):
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("📊 Сводка", callback_data="admin_stats"))
-    kb.add(types.InlineKeyboardButton("👥 Все игроки", callback_data="admin_users"))
-    kb.add(types.InlineKeyboardButton("📈 Популярные игры", callback_data="admin_games"))
-    kb.add(types.InlineKeyboardButton("💰 Топ по монетам", callback_data="admin_coins"))
-    kb.add(types.InlineKeyboardButton("🏠 Комнаты", callback_data="admin_rooms"))
-    kb.add(types.InlineKeyboardButton("🧹 Закрыть комнату", callback_data="admin_close_room"))
-    kb.add(types.InlineKeyboardButton("⛔ Бан", callback_data="admin_ban_user"))
-    kb.add(types.InlineKeyboardButton("✅ Разбан", callback_data="admin_unban_user"))
-    kb.add(types.InlineKeyboardButton("💾 Backup", callback_data="admin_backup"))
-    kb.add(types.InlineKeyboardButton("🏆 Достижения", callback_data="admin_achievements"))
-    kb.add(types.InlineKeyboardButton("📣 Рассылка", callback_data="admin_broadcast"))
+    kb.add(types.InlineKeyboardButton(
+        localized_text(uid, "📣 Следить за новостями", "📣 Follow the news", "📣 Стежити за новинами"),
+        url=_maintenance_channel_url(),
+    ))
+    return kb
+
+
+def _maintenance_public(user_id):
+    """Что Mini App показывает про тех. работы; None — их нет."""
+    if not maintenance_active():
+        return None
+    return {
+        "active": True,
+        "admin": bool(user_id and _is_bot_admin(user_id)),
+        "note": _maintenance_note(),
+        "channel": MAINTENANCE_CHANNEL,
+        "channel_url": _maintenance_channel_url(),
+    }
+
+
+def _maintenance_command(text):
+    """Имя команды без слэша; None — это не команда этому боту."""
+    if not text.startswith("/"):
+        return None
+    name, _, target = text.split(maxsplit=1)[0][1:].partition("@")
+    if target and target.lower() != str(INLINE_BOT_USERNAME).lower():
+        return None
+    return name.lower()
+
+
+def _maintenance_message_kind(message):
+    """'command' или 'text', если сообщение начинает игру; иначе None."""
+    text = (message.text or "").strip()
+    if not text:
+        return None
+    command = _maintenance_command(text)
+    if command is not None:
+        return "command" if command in _MAINTENANCE_COMMANDS else None
+    if text in _MAINTENANCE_TEXTS or is_business_game_trigger(text)[0]:
+        return "text"
+    return None
+
+
+def _maintenance_callback_starts_game(data):
+    if data.startswith(_MAINTENANCE_CALLBACK_PREFIXES):
+        return True
+    # Превью из инлайн-выдачи: партия создана, но в неё ещё не заходили.
+    # id партий — метка времени в миллисекундах (short_id).
+    for token in data.split("_"):
+        if len(token) >= 10 and token.isdigit():
+            if any(store.previews and store.is_preview(token) for store in _GAME_STORES):
+                return True
+    return False
+
+
+def _maintenance_reply_inline(query):
+    uid = query.from_user.id
+    result = types.InlineQueryResultArticle(
+        id="maintenance",
+        title=localized_text(uid, "🛠 Технические работы", "🛠 Maintenance", "🛠 Технічні роботи"),
+        description=localized_text(
+            uid,
+            "Новые игры ненадолго на паузе — подробности в канале",
+            "New games are paused for a bit — details in the channel",
+            "Нові ігри ненадовго на паузі — деталі в каналі",
+        ),
+        input_message_content=types.InputTextMessageContent(_maintenance_text(uid), parse_mode="HTML"),
+        reply_markup=_maintenance_kb(uid),
+    )
+    try:
+        bot.answer_inline_query(query.id, [result], cache_time=1, is_personal=True)
+    except Exception as e:
+        log_exception("maintenance_inline", e, user_id=uid)
+
+
+def _maintenance_reply_callback(call):
+    try:
+        bot.answer_callback_query(call.id, _maintenance_alert(call.from_user.id), show_alert=True)
+    except Exception as e:
+        log_exception("maintenance_callback", e, user_id=call.from_user.id)
+
+
+def _maintenance_reply_message(message):
+    uid = message.from_user.id
+    try:
+        if message.chat.type == "private" and _maintenance_command(message.text or "") == "start":
+            # Рассылка после тех. работ должна дойти и до тех, кто пришёл сейчас
+            get_user(uid)
+            with user_record(uid) as rec:
+                rec["started"] = True
+                rec.pop("bot_blocked", None)
+        extra = {}
+        if getattr(message, "business_connection_id", None):
+            extra["business_connection_id"] = message.business_connection_id
+        bot.send_message(message.chat.id, _maintenance_text(uid), parse_mode="HTML",
+                         reply_markup=_maintenance_kb(uid), **extra)
+    except Exception as e:
+        log_exception("maintenance_message", e, user_id=uid, chat_id=message.chat.id)
+
+
+def _maintenance_intercept(update):
+    """True — апдейт начинает новую партию, заглушка уже поставлена в очередь."""
+    if update.inline_query is not None:
+        query = update.inline_query
+        if not _maintenance_applies(query.from_user.id):
+            return False
+        bot._exec_task(_maintenance_reply_inline, query)
+        return True
+    if update.callback_query is not None:
+        call = update.callback_query
+        if not _maintenance_applies(call.from_user.id) or not _maintenance_callback_starts_game(call.data or ""):
+            return False
+        bot._exec_task(_maintenance_reply_callback, call)
+        return True
+    message = update.message or update.business_message
+    if message is None or message.from_user is None or not _maintenance_applies(message.from_user.id):
+        return False
+    kind = _maintenance_message_kind(message)
+    if not kind:
+        return False
+    # Слово «казино» в общем чате группы — не повод отвечать заглушкой
+    if kind == "command" or message.chat.type == "private":
+        bot._exec_task(_maintenance_reply_message, message)
+    return True
+
+
+_original_process_new_updates = bot.process_new_updates
+
+
+def _process_new_updates_with_maintenance(updates):
+    if maintenance_active() and updates:
+        passed = []
+        for update in updates:
+            try:
+                blocked = _maintenance_intercept(update)
+            except Exception as e:
+                log_exception("maintenance_intercept", e)
+                blocked = False
+            if not blocked:
+                passed.append(update)
+            elif update.update_id > bot.last_update_id:
+                # Перехваченный апдейт библиотека не увидит — сдвигаем offset за неё,
+                # иначе Telegram пришлёт его снова.
+                bot.last_update_id = update.update_id
+        updates = passed
+    _original_process_new_updates(updates)
+
+
+bot.process_new_updates = _process_new_updates_with_maintenance
+
+
+def _active_games(window):
+    """Партии, в которых были ходы за последние window секунд."""
+    return sum(store.active_count(window) for store in _GAME_STORES)
+
+
+def _maintenance_watch():
+    """Сообщает админам, когда за время тех. работ партии перестали получать ходы."""
+    if not maintenance_active() or _maintenance.get("quiet_notified"):
+        return
+    since = float(_maintenance.get("since") or 0)
+    if time.time() - since < MAINTENANCE_QUIET_WINDOW or _active_games(MAINTENANCE_QUIET_WINDOW):
+        return
+    _maintenance_store(lambda state: state.update(quiet_notified=True))
+    _send_admin_alert(
+        "✅ <b>Тех. работы</b>: за последние 5 минут не было ни одного хода — "
+        "похоже, все партии доиграны. Можно обновлять бота.\n"
+        "Закончите тех. работы в /adminpanel, когда всё будет готово."
+    )
+
+
+_maintenance_load()
+
+
+# ------------------------------- админ-панель -------------------------------
+
+def _admin_since_text(since):
+    minutes = int(max(0, time.time() - since) // 60)
+    if minutes < 60:
+        return f"{minutes} мин"
+    return f"{minutes // 60} ч {minutes % 60} мин"
+
+
+def _admin_home_text():
+    active = _active_games(MAINTENANCE_ACTIVITY_WINDOW)
+    lines = ["🛠 <b>Админ-панель</b>", ""]
+    if maintenance_active():
+        since = float(_maintenance.get("since") or time.time())
+        started = datetime.fromtimestamp(since).strftime("%H:%M")
+        lines.append(f"🔧 <b>Идут тех. работы</b> — с {started}, уже {_admin_since_text(since)}")
+        lines.append("Новые партии закрыты, начатые доигрываются.")
+        lines.append(f"🎮 Партий с ходами за 10 минут: <b>{active}</b>")
+        note = _maintenance_note()
+        lines.append(f"💬 Текст для игроков: «{html.escape(note)}»" if note else "💬 Своего текста для игроков нет")
+    else:
+        lines.append("🟢 Бот работает в обычном режиме")
+        lines.append(f"🎮 Партий с ходами за 10 минут: <b>{active}</b>")
+    lines += ["", "Выберите раздел:"]
+    return "\n".join(lines)
+
+
+def _admin_panel_kb():
+    def btn(text, data):
+        return types.InlineKeyboardButton(text, callback_data=data)
+
+    kb = types.InlineKeyboardMarkup()
+    kb.row(btn("📊 Сводка", "admin_stats"), btn("👥 Игроки", "admin_users"))
+    kb.row(btn("📈 Популярные игры", "admin_games"), btn("💰 Топ по монетам", "admin_coins"))
+    kb.row(btn("🏠 Комнаты", "admin_rooms"), btn("🧹 Закрыть комнату", "admin_close_room"))
+    kb.row(btn("⛔ Бан", "admin_ban_user"), btn("✅ Разбан", "admin_unban_user"))
+    kb.row(btn("🏆 Достижения", "admin_achievements"), btn("💾 Backup", "admin_backup"))
+    kb.row(btn("📣 Рассылка", "admin_broadcast"))
+    if maintenance_active():
+        kb.row(btn("✏️ Текст для игроков", "admin_mnt_note"), btn("👁 Как видят игроки", "admin_mnt_preview"))
+        kb.row(btn("✅ Завершить тех. работы", "admin_mnt_off"))
+    else:
+        kb.row(btn("🛠 Начать тех. работы", "admin_mnt_ask"))
+    kb.row(btn("🔄 Обновить", "admin_home"))
+    return kb
+
+
+def _admin_back_kb(refresh=None):
+    kb = types.InlineKeyboardMarkup()
+    buttons = []
+    if refresh:
+        buttons.append(types.InlineKeyboardButton("🔄 Обновить", callback_data=refresh))
+    buttons.append(types.InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_home"))
+    kb.row(*buttons)
+    return kb
+
+
+def _admin_maintenance_confirm_text():
+    return (
+        "🛠 <b>Начать технические работы?</b>\n\n"
+        "Что произойдёт:\n"
+        f"• /start, игровые команды, инлайн-режим и Mini App покажут игрокам сообщение "
+        f"о тех. работах и ссылку на канал {html.escape(MAINTENANCE_CHANNEL)}\n"
+        "• Новые партии начать будет нельзя\n"
+        "• Партии, которые уже идут, доиграются до конца\n"
+        "• Админы бота пользуются им как обычно\n\n"
+        f"Сейчас партий с ходами за 10 минут: <b>{_active_games(MAINTENANCE_ACTIVITY_WINDOW)}</b>\n"
+        "Когда ходов не будет 5 минут, я напишу, что всё доиграно."
+    )
+
+
+def _admin_maintenance_confirm_kb():
+    kb = types.InlineKeyboardMarkup()
+    kb.row(
+        types.InlineKeyboardButton("✅ Да, начать", callback_data="admin_mnt_on"),
+        types.InlineKeyboardButton("◀️ Отмена", callback_data="admin_home"),
+    )
     return kb
 
 # Рассылка всем пользователям. Telegram пускает около 30 сообщений в секунду
@@ -5884,7 +6267,7 @@ def admin_panel_cmd(message):
     if not _is_bot_admin(uid):
         bot.send_message(message.chat.id, "⛔ Доступ запрещен.")
         return
-    bot.send_message(message.chat.id, "🛠 Админ-панель", reply_markup=_admin_panel_kb())
+    bot.send_message(message.chat.id, _admin_home_text(), reply_markup=_admin_panel_kb(), parse_mode="HTML")
 
 
 @bot.message_handler(commands=["backup"])
@@ -5926,18 +6309,71 @@ def unban_cmd(message):
     _set_user_ban(uid, int(parts[1]), False)
     bot.send_message(message.chat.id, f"✅ Пользователь {parts[1]} разбанен.")
 
+def _admin_answer(call, text=None, alert=False):
+    try:
+        bot.answer_callback_query(call.id, text, show_alert=alert)
+    except Exception:
+        pass
+
+
+def _admin_show_home(call):
+    safe_edit_message(call, _admin_home_text(), reply_markup=_admin_panel_kb(), parse_mode="HTML")
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
 def admin_panel_callbacks(call):
     uid = call.from_user.id
     if not _is_bot_admin(uid):
-        try:
-            bot.answer_callback_query(call.id, "Нет доступа", show_alert=True)
-        except Exception:
-            pass
+        _admin_answer(call, "Нет доступа", alert=True)
         return
 
     data = call.data
+    if data == "admin_home":
+        _admin_answer(call)
+        _admin_show_home(call)
+        return
+
+    if data == "admin_mnt_ask":
+        _admin_answer(call)
+        if maintenance_active():
+            _admin_show_home(call)
+            return
+        safe_edit_message(call, _admin_maintenance_confirm_text(),
+                          reply_markup=_admin_maintenance_confirm_kb(), parse_mode="HTML")
+        return
+
+    if data == "admin_mnt_on":
+        if not maintenance_active():
+            _set_maintenance(uid, True)
+        _admin_answer(call, "🛠 Тех. работы начаты: новые партии закрыты", alert=True)
+        _admin_show_home(call)
+        return
+
+    if data == "admin_mnt_off":
+        if maintenance_active():
+            _set_maintenance(uid, False)
+        _admin_answer(call, "✅ Тех. работы завершены — бот снова принимает игроков", alert=True)
+        _admin_show_home(call)
+        return
+
+    if data == "admin_mnt_note":
+        _admin_answer(call)
+        admin_wait[uid] = {"action": "maintenance_note"}
+        bot.send_message(
+            uid,
+            "✏️ Пришлите текст, который игроки увидят под сообщением о тех. работах — "
+            "например, «Вернёмся к 18:00 с новой игрой».\n\n"
+            "Отправьте «-», чтобы убрать текст.",
+        )
+        return
+
+    if data == "admin_mnt_preview":
+        _admin_answer(call)
+        bot.send_message(uid, _maintenance_text(uid), parse_mode="HTML", reply_markup=_maintenance_kb(uid))
+        return
+
     if data == "admin_stats":
+        _admin_answer(call)
         d = load_data()
         users = d.get("users", {})
         total_users = len(users)
@@ -5959,13 +6395,17 @@ def admin_panel_callbacks(call):
             "📊 Сводка\n\n"
             f"👥 Пользователей: {total_users}\n"
             f"🎮 Сыграно игр: {total_games}\n"
+            f"🕹 Партий с ходами за 10 минут: {_active_games(MAINTENANCE_ACTIVITY_WINDOW)}\n"
             f"🪙 Монет в системе: {total_coins}\n"
             f"💎 Премиум активен: {premium_count}\n"
             f"🏠 Комнаты: активные {active_count}, пул {pool_count}\n"
+            f"🛠 Тех. работы: {'идут' if maintenance_active() else 'нет'}\n"
         )
-        safe_edit_message(call, text, reply_markup=_admin_panel_kb())
+        safe_edit_message(call, text, reply_markup=_admin_back_kb(data))
         return
+
     if data == "admin_users":
+        _admin_answer(call)
         d = load_data()
         users = d.get("users", {})
         rows = []
@@ -5983,10 +6423,11 @@ def admin_panel_callbacks(call):
                 text += f"{i}. {name} (ID {uid_str}) — {total}\n"
         else:
             text += "Нет данных."
-        safe_edit_message(call, text, reply_markup=_admin_panel_kb())
+        safe_edit_message(call, text, reply_markup=_admin_back_kb(data))
         return
 
     if data == "admin_games":
+        _admin_answer(call)
         d = load_data()
         global_stats = d.get("global_game_stats", {})
         rows = sorted(global_stats.items(), key=lambda kv: int(kv[1] or 0), reverse=True)
@@ -5996,10 +6437,11 @@ def admin_panel_callbacks(call):
                 text += f"{i}. {GAME_TITLES.get(gk, gk)} — {int(cnt or 0)}\n"
         else:
             text += "Пока нет статистики."
-        safe_edit_message(call, text, reply_markup=_admin_panel_kb())
+        safe_edit_message(call, text, reply_markup=_admin_back_kb(data))
         return
 
     if data == "admin_coins":
+        _admin_answer(call)
         d = load_data()
         users = d.get("users", {})
         rows = []
@@ -6016,10 +6458,11 @@ def admin_panel_callbacks(call):
                 text += f"{i}. {name} (ID {uid_str}) — {coins}\n"
         else:
             text += "Пока нет данных."
-        safe_edit_message(call, text, reply_markup=_admin_panel_kb())
+        safe_edit_message(call, text, reply_markup=_admin_back_kb(data))
         return
 
     if data == "admin_rooms":
+        _admin_answer(call)
         d = load_data()
         rooms = d.get("rooms", {})
         active = rooms.get("active", {}) or {}
@@ -6035,38 +6478,36 @@ def admin_panel_callbacks(call):
                 text += f"• {code} | chat {chat_id} | {creator} | до {ends_str}\n"
         else:
             text += "Нет активных комнат."
-        safe_edit_message(call, text, reply_markup=_admin_panel_kb())
+        safe_edit_message(call, text, reply_markup=_admin_back_kb(data))
         return
 
     if data == "admin_close_room":
+        _admin_answer(call)
         admin_wait[uid] = {"action": "close_room"}
-        try:
-            bot.answer_callback_query(call.id)
-        except Exception:
-            pass
         bot.send_message(uid, "Введите код комнаты для закрытия (например: A1B2C):")
         return
 
     if data == "admin_ban_user":
+        _admin_answer(call)
         admin_wait[uid] = {"action": "ban_user"}
-        bot.answer_callback_query(call.id)
         bot.send_message(uid, "Введите: <user_id> <причина>")
         return
 
     if data == "admin_unban_user":
+        _admin_answer(call)
         admin_wait[uid] = {"action": "unban_user"}
-        bot.answer_callback_query(call.id)
         bot.send_message(uid, "Введите user_id для разбана:")
         return
 
     if data == "admin_backup":
-        bot.answer_callback_query(call.id, "Создаю backup...")
+        _admin_answer(call, "Создаю backup...")
         path = backup_json_files()
         log_admin_action(uid, "backup", details={"path": path}, db_path=DB_FILE)
-        safe_edit_message(call, f"✅ Backup создан:\n{path or 'не удалось создать'}", reply_markup=_admin_panel_kb())
+        safe_edit_message(call, f"✅ Backup создан:\n{path or 'не удалось создать'}", reply_markup=_admin_back_kb())
         return
 
     if data == "admin_achievements":
+        _admin_answer(call)
         d = load_data()
         users = d.get("users", {})
         counts = {k: 0 for k in ACHIEVEMENTS.keys()}
@@ -6082,16 +6523,15 @@ def admin_panel_callbacks(call):
         text = "🏆 Достижения (кол-во открытий):\n\n"
         for key, meta in ACHIEVEMENTS.items():
             text += f"• {meta['title']}: {counts.get(key, 0)}\n"
-        safe_edit_message(call, text, reply_markup=_admin_panel_kb())
+        safe_edit_message(call, text, reply_markup=_admin_back_kb(data))
         return
 
     if data == "admin_broadcast":
-        try:
-            bot.answer_callback_query(call.id)
-        except Exception:
-            pass
+        _admin_answer(call)
         _send_broadcast_menu(call.message.chat.id if call.message else uid)
         return
+
+    _admin_answer(call)
 
 @bot.message_handler(commands=["settext"])
 def settext_cmd(message):
@@ -11596,6 +12036,18 @@ def admin_wait_input(message):
         _set_user_ban(uid, int(target), False)
         bot.send_message(uid, f"✅ Пользователь {target} разбанен.")
         return
+    if action == "maintenance_note":
+        note = (message.text or "").strip()
+        if not note:
+            admin_wait[uid] = wait
+            bot.send_message(uid, "Нужен текст сообщением. «-» — убрать текст.")
+            return
+        note = "" if note == "-" else note[:300]
+        _set_maintenance_note(uid, note)
+        bot.send_message(uid, "✅ Текст обновлён. Вот что увидят игроки:" if note else "✅ Свой текст убран. Вот что увидят игроки:")
+        bot.send_message(uid, _maintenance_text(uid), parse_mode="HTML", reply_markup=_maintenance_kb(uid))
+        bot.send_message(uid, _admin_home_text(), reply_markup=_admin_panel_kb(), parse_mode="HTML")
+        return
 
 # ---------------------------------------------------------------------------
 # Бот в любой группе
@@ -11606,7 +12058,7 @@ def admin_wait_input(message):
 # своё хранение в памяти и никаких действий над самим чатом.
 # ---------------------------------------------------------------------------
 GROUP_LAUNCH_COOLDOWN = 10
-group_sessions = BoundedGames()     # код партии -> chat_id
+group_sessions = BoundedGames(previews=False)     # код партии -> chat_id
 _group_last_launch = {}
 _room_chats_cache = {"at": 0.0, "ids": frozenset()}
 
@@ -12054,6 +12506,7 @@ def _webapp_profile(user_id, tg_user=None):
         "theme": rec.get("theme_style", "classic"),
         "titles": rec.get("titles") if isinstance(rec.get("titles"), list) else [],
         "records": _records_of(rec),
+        "maintenance": _maintenance_public(user_id),
         "season": {
             "active": season_active(),
             "level": level, "into": into, "per": per, "max": ev.SEASON_MAX_LEVEL,
@@ -12319,7 +12772,7 @@ def _webapp_apply_result(user_id, tg_user, payload):
 # ------------------------- игры на удачу на сервере -------------------------
 # Ставка списывается при начале раздачи и выплачивается сервером: закрыть
 # приложение, увидев плохие карты, бесполезно — ставка уже в банке.
-webapp_tables = BoundedGames()     # uid -> {"game", "bet", "state", "session"}
+webapp_tables = BoundedGames(previews=False)     # uid -> {"game", "bet", "state", "session"}
 
 
 def _luck_take_bet(uid, raw_bet):
@@ -12357,6 +12810,8 @@ def _webapp_luck_locked(uid, tg_user, payload):
     game = str(payload.get("game") or "")
     action = str(payload.get("action") or "")
     out = {}
+    if game in ("coin", "slot") and _maintenance_applies(uid):
+        raise ValueError("maintenance")
     if game == "coin":
         side = "heads" if payload.get("side") == "heads" else "tails"
         bet = _luck_take_bet(uid, payload.get("bet"))
@@ -12387,6 +12842,9 @@ def _webapp_card_table(uid, game, action, payload):
         if table and table["state"]["status"] == "playing":
             # Незаконченная раздача продолжается, новую ставку не берём.
             return _card_table_view(table)
+        if _maintenance_applies(uid):
+            # Начатая раздача доигрывается, новую на время тех. работ не открываем
+            raise ValueError("maintenance")
         bet = _luck_take_bet(uid, payload.get("bet"))
         if bet is None:
             raise ValueError("not enough coins")
