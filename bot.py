@@ -39,6 +39,7 @@ from core.db import (
     update_state_key,
     user_exists,
 )
+from core import business as biz_core
 from core import casino
 from core import events as ev
 from room_games import (
@@ -6139,6 +6140,700 @@ def shop_callbacks(call):
             pass
 
 # ---------------------------------------------------------------------------
+# Telegram Business: бот подключён к личному аккаунту владельца.
+#
+# • собеседник удалил или изменил сообщение — пишем владельцу в чат с ботом,
+#   что там было (для этого помним последние сообщения — только в памяти);
+# • .mute 10m — сообщения собеседника удаляются сразу после отправки, .unmute;
+# • игры прямо в переписке: .игры, .rps, .ttt, .dice;
+# • открытая телеметрия: при подключении спрашиваем согласие считать время
+#   подключения. Отказ ничего не меняет — остаётся лишь отметка «подключал».
+#
+# Состояние — в state["business"]: подключения, ответы о телеметрии, мьюты и
+# настройки. Логика без Telegram — в core/business.py.
+# ---------------------------------------------------------------------------
+_biz = {}
+_biz_lock = threading.Lock()
+biz_cache = biz_core.MessageCache()
+biz_games = BoundedGames()
+# Сообщения, которые удалил сам бот (мьют), — об их удалении не докладываем
+_biz_self_deleted = OrderedDict()
+_biz_rights_warned = set()
+BIZ_DICE_DELAY = 3.6           # сколько крутится анимация кубика в Telegram
+BIZ_GAME_COMMANDS = {
+    ".игры": None, ".games": None, ".game": None,
+    ".rps": "rps", ".кнб": "rps",
+    ".ttt": "ttt", ".крестики": "ttt",
+    ".dice": "dice", ".кости": "dice",
+}
+BIZ_GAME_TITLES = {"rps": "✂️ Камень, ножницы, бумага", "ttt": "❌⭕ Крестики-нолики", "dice": "🎲 Кости"}
+BIZ_GAME_KEYS = {"rps": "rps", "ttt": "ttt", "dice": "dice"}
+
+
+def _biz_load():
+    try:
+        state = read_state_key("business", {}, db_path=DB_FILE)
+    except Exception as e:
+        log_exception("business_load", e)
+        state = {}
+    _biz.clear()
+    _biz.update(state if isinstance(state, dict) else {})
+    for key in ("connections", "users", "mutes", "settings"):
+        if not isinstance(_biz.get(key), dict):
+            _biz[key] = {}
+
+
+def _biz_store(mutate):
+    """Меняет состояние в базе и в памяти одним ходом."""
+    def apply(old):
+        state = dict(old) if isinstance(old, dict) else {}
+        for key in ("connections", "users", "mutes", "settings"):
+            if not isinstance(state.get(key), dict):
+                state[key] = {}
+        mutate(state)
+        return state
+    with _biz_lock:
+        state = update_state_key("business", apply, default={}, db_path=DB_FILE)
+        _biz.clear()
+        _biz.update(state)
+
+
+def _biz_connection(connection_id):
+    """{"owner", "chat", "name", "enabled", "rights"} подключения; спросит Telegram, если не знаем."""
+    conn = _biz["connections"].get(connection_id)
+    if conn:
+        return conn
+    try:
+        _biz_save_connection(bot.get_business_connection(connection_id))
+    except Exception as e:
+        log_exception("business_connection_fetch", e)
+        return None
+    return _biz["connections"].get(connection_id)
+
+
+def _biz_rights(connection):
+    rights = getattr(connection, "rights", None)
+    if rights is None:
+        # Старые подключения сообщают только can_reply
+        return {"can_reply": bool(getattr(connection, "can_reply", False))}
+    return {name: bool(getattr(rights, name, False))
+            for name in ("can_reply", "can_read_messages", "can_delete_all_messages")}
+
+
+def _biz_save_connection(connection):
+    owner = connection.user
+    record = {
+        "owner": owner.id, "chat": connection.user_chat_id, "enabled": bool(connection.is_enabled),
+        "name": owner.first_name or owner.username or "Владелец", "rights": _biz_rights(connection),
+    }
+    _biz_store(lambda state: state["connections"].__setitem__(connection.id, record))
+    return record
+
+
+def _biz_owner_connected(uid):
+    return any(c.get("owner") == uid and c.get("enabled") for c in _biz["connections"].values())
+
+
+def _biz_settings(uid):
+    settings = {"deleted": True, "edited": True}
+    settings.update(_biz["settings"].get(str(uid)) or {})
+    return settings
+
+
+def _biz_notify(conn, text, reply_markup=None):
+    try:
+        return bot.send_message(conn["chat"], text, reply_markup=reply_markup)
+    except Exception as e:
+        LOGGER.info("Не удалось написать владельцу бизнес-подключения %s: %s", conn.get("owner"), e)
+
+
+def _biz_chat_kb(chat_id):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("💬 Открыть переписку", url=f"tg://user?id={chat_id}"))
+    return kb
+
+
+# --------------------------------- подключение ---------------------------------
+
+BIZ_FEATURES = (
+    "🗑 собеседник удалил сообщение — покажу, что там было\n"
+    "✏️ собеседник изменил сообщение — покажу, как было и как стало\n"
+    "🎮 игры прямо в переписке: напишите в чате <code>.игры</code> "
+    "(или сразу <code>.rps</code>, <code>.ttt</code>, <code>.dice</code>)\n"
+    "🔇 <code>.mute 10m</code> — сообщения собеседника будут сразу удаляться "
+    "(s — секунды, m — минуты, h — часы, d — дни; без срока — пока не снимете), "
+    "<code>.unmute</code> — снять\n"
+    "⚙️ настройки — /business"
+)
+BIZ_RIGHT_NAMES = {
+    "can_read_messages": "читать сообщения — без этого бот не увидит ни удалений, ни команд",
+    "can_reply": "отвечать на сообщения — для игр",
+    "can_delete_all_messages": "удалять все сообщения — для .mute",
+}
+
+
+def _biz_missing_rights(conn):
+    rights = conn.get("rights") or {}
+    return [text for name, text in BIZ_RIGHT_NAMES.items() if name in rights and not rights[name]]
+
+
+def _biz_consent_kb():
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("✅ Согласен", callback_data="bzc_yes"),
+           types.InlineKeyboardButton("🙅 Нет, спасибо", callback_data="bzc_no"))
+    return kb
+
+
+BIZ_TELEMETRY_TEXT = (
+    "📊 <b>Небольшая просьба.</b> Мы хотим понимать, сколько времени бот остаётся подключённым "
+    "к аккаунтам, — так видно, приносит ли он пользу. Считаем только это время: ни сообщений, "
+    "ни собеседников, ни имён.\n\n"
+    "Если откажетесь, ничего не изменится — все функции работают как обычно, а в статистике "
+    "останется лишь то, что вы когда-то подключали бота. Передумать можно в /business."
+)
+
+
+@bot.business_connection_handler(func=lambda c: True)
+def business_connection_update(connection):
+    try:
+        before = _biz["connections"].get(connection.id) or {}
+        conn = _biz_save_connection(connection)
+        uid = conn["owner"]
+        was_on, now_on = bool(before.get("enabled")), conn["enabled"]
+
+        def telemetry(state):
+            user = state["users"].setdefault(str(uid), {"consent": None})
+            if now_on and not was_on:
+                biz_core.telemetry_on_connect(user)
+            elif was_on and not now_on:
+                biz_core.telemetry_on_disconnect(user)
+        _biz_store(telemetry)
+
+        if now_on and not was_on:
+            text = f"💼 <b>Бот подключён к вашему аккаунту!</b>\n\nЧто теперь умею:\n{BIZ_FEATURES}"
+            missing = _biz_missing_rights(conn)
+            if missing:
+                text += ("\n\n⚠️ Чтобы всё работало, разрешите боту в «Telegram для бизнеса → Чат-боты»:\n"
+                         + "\n".join(f"• {item}" for item in missing))
+            consent = (_biz["users"].get(str(uid)) or {}).get("consent")
+            bot.send_message(conn["chat"], text, parse_mode="HTML")
+            if consent is None:
+                bot.send_message(conn["chat"], BIZ_TELEMETRY_TEXT, parse_mode="HTML", reply_markup=_biz_consent_kb())
+        elif was_on and not now_on:
+            _biz_notify(conn, "👋 Бот отключён от вашего аккаунта. Будем рады вернуться — /business")
+        elif now_on:
+            missing = _biz_missing_rights(conn)
+            if missing:
+                _biz_notify(conn, "⚙️ Права бота обновились. Не хватает:\n" + "\n".join(f"• {m}" for m in missing))
+    except Exception as e:
+        log_exception("business_connection", e)
+
+
+@bot.callback_query_handler(func=lambda c: c.data in ("bzc_yes", "bzc_no"))
+def business_consent_callback(call):
+    uid = call.from_user.id
+    consent = call.data == "bzc_yes"
+    connected = _biz_owner_connected(uid)
+    _biz_store(lambda state: biz_core.telemetry_set_consent(
+        state["users"].setdefault(str(uid), {"consent": None}), consent, connected))
+    bot.answer_callback_query(call.id, "Спасибо! 🙌" if consent else "Хорошо, ничего не считаем")
+    note = ("✅ Спасибо! Считаем только время подключения. Передумаете — /business."
+            if consent else "🙅 Договорились: время не считаем, все функции работают как прежде. Передумаете — /business.")
+    safe_edit_message(call, note)
+
+
+# ------------------------------ сообщения в переписках ------------------------------
+
+def _biz_mute_key(connection_id, chat_id):
+    return f"{connection_id}:{chat_id}"
+
+
+def _biz_delete(connection_id, chat_id, message_ids):
+    for message_id in message_ids:
+        _biz_self_deleted[(connection_id, chat_id, message_id)] = time.time()
+    while len(_biz_self_deleted) > 5000:
+        _biz_self_deleted.popitem(last=False)
+    bot.delete_business_messages(connection_id, message_ids)
+
+
+def _biz_handle_mute(message, conn, seconds):
+    key = _biz_mute_key(message.business_connection_id, message.chat.id)
+    friend = message.chat.first_name or "Собеседник"
+    until = 0 if seconds == 0 else time.time() + seconds
+    _biz_store(lambda state: state["mutes"].__setitem__(key, until))
+    span = "пока не напишете .unmute" if seconds == 0 else f"на {biz_core.human_duration(seconds)}"
+    text = (f"🔇 {friend}: беззвучный режим {span}. Новые сообщения из этой переписки удаляются "
+            "сразу после отправки.\n.unmute — снять.")
+    if not (conn.get("rights") or {}).get("can_delete_all_messages", True):
+        text += "\n\n⚠️ Но у бота нет права удалять сообщения — включите его в «Telegram для бизнеса → Чат-боты»."
+    _biz_notify(conn, text, _biz_chat_kb(message.chat.id))
+
+
+def _biz_handle_unmute(message, conn):
+    key = _biz_mute_key(message.business_connection_id, message.chat.id)
+    _biz_store(lambda state: state["mutes"].pop(key, None))
+    _biz_notify(conn, f"🔊 {message.chat.first_name or 'Собеседник'} снова может писать вам.",
+                _biz_chat_kb(message.chat.id))
+
+
+def _biz_muted(connection_id, chat_id):
+    until = _biz["mutes"].get(_biz_mute_key(connection_id, chat_id))
+    if until is None:
+        return False
+    if biz_core.mute_active(until):
+        return True
+    _biz_store(lambda state: state["mutes"].pop(_biz_mute_key(connection_id, chat_id), None))
+    return False
+
+
+@bot.business_message_handler(func=lambda m: True, content_types=[
+    "text", "photo", "video", "animation", "voice", "video_note", "audio", "document", "sticker",
+    "location", "contact", "dice", "poll",
+])
+def business_message(message):
+    try:
+        connection_id = message.business_connection_id
+        conn = _biz_connection(connection_id)
+        if not conn or not conn.get("enabled"):
+            return
+        sender = message.from_user.id if message.from_user else None
+        from_owner = sender == conn["owner"]
+        text = (message.text or "").strip()
+
+        if from_owner:
+            lowered = text.lower()
+            try:
+                seconds = biz_core.parse_mute(text)
+            except ValueError as e:
+                _biz_notify(conn, f"🔇 {e}. Например: .mute 10m")
+                return
+            if seconds is not None:
+                _biz_quiet_delete(connection_id, message)
+                _biz_handle_mute(message, conn, seconds)
+                return
+            if lowered in (".unmute", ".размут", ".анмут"):
+                _biz_quiet_delete(connection_id, message)
+                _biz_handle_unmute(message, conn)
+                return
+        elif _biz_muted(connection_id, message.chat.id):
+            try:
+                _biz_delete(connection_id, message.chat.id, [message.message_id])
+            except Exception as e:
+                if conn["owner"] not in _biz_rights_warned:
+                    _biz_rights_warned.add(conn["owner"])
+                    _biz_notify(conn, "⚠️ Не получилось удалить сообщение заглушённого собеседника — "
+                                      "проверьте, что у бота есть право удалять сообщения.")
+                LOGGER.info("Мьют: удаление не удалось: %s", e)
+            return
+        else:
+            biz_cache.put(connection_id, message.chat.id, message.message_id, biz_core.snapshot(message))
+
+        if text.lower() in BIZ_GAME_COMMANDS:
+            _biz_quiet_delete(connection_id, message)
+            if _maintenance_applies(sender):
+                _biz_notify(conn, "🛠 Сейчас идут технические работы — игры ненадолго на паузе.")
+                return
+            kind = BIZ_GAME_COMMANDS[text.lower()]
+            if kind:
+                _biz_start_game(connection_id, message.chat, conn, kind)
+            else:
+                _biz_send_menu(connection_id, message.chat, conn)
+    except Exception as e:
+        log_exception("business_message", e)
+
+
+def _biz_quiet_delete(connection_id, message):
+    """Убирает служебную команду из переписки, если у бота есть на это право."""
+    try:
+        _biz_delete(connection_id, message.chat.id, [message.message_id])
+    except Exception:
+        pass
+
+
+@bot.edited_business_message_handler(func=lambda m: True, content_types=[
+    "text", "photo", "video", "animation", "audio", "document",
+])
+def business_message_edited(message):
+    try:
+        connection_id = message.business_connection_id
+        conn = _biz_connection(connection_id)
+        if not conn or not conn.get("enabled") or not message.from_user:
+            return
+        if message.from_user.id == conn["owner"]:
+            return
+        new = biz_core.snapshot(message)
+        old = biz_cache.get(connection_id, message.chat.id, message.message_id)
+        biz_cache.put(connection_id, message.chat.id, message.message_id, new)
+        if not _biz_settings(conn["owner"])["edited"]:
+            return
+        if old and biz_core.describe(old) == biz_core.describe(new):
+            return                                   # поменялось только оформление
+        before = biz_core.describe(old) if old else "не успел запомнить — сообщение пришло раньше, чем я его увидел"
+        _biz_notify(conn, f"✏️ {new['name']} · сообщение изменено\n\nБыло: {before}\nСтало: {biz_core.describe(new)}",
+                    _biz_chat_kb(message.chat.id))
+    except Exception as e:
+        log_exception("business_message_edited", e)
+
+
+BIZ_MEDIA_SENDERS = {
+    "photo": "send_photo", "video": "send_video", "animation": "send_animation", "voice": "send_voice",
+    "audio": "send_audio", "document": "send_document",
+}
+
+
+@bot.deleted_business_messages_handler(func=lambda d: True)
+def business_messages_deleted(deleted):
+    try:
+        connection_id = deleted.business_connection_id
+        conn = _biz_connection(connection_id)
+        if not conn or not conn.get("enabled") or not _biz_settings(conn["owner"])["deleted"]:
+            return
+        chat_id = deleted.chat.id
+        shown = 0
+        for message_id in deleted.message_ids:
+            if _biz_self_deleted.pop((connection_id, chat_id, message_id), None):
+                continue
+            record = biz_cache.pop(connection_id, chat_id, message_id)
+            # Без записи не знаем, чьё это сообщение, — молчим, чтобы не докладывать о своих же удалениях
+            if not record or record.get("from") == conn["owner"] or shown >= 10:
+                continue
+            shown += 1
+            _biz_notify(conn, f"🗑 {record['name']} · сообщение удалено\n\n{biz_core.describe(record)}",
+                        _biz_chat_kb(chat_id))
+            sender = BIZ_MEDIA_SENDERS.get(record.get("kind"))
+            if record.get("file_id") and record.get("kind") in ("sticker", "video_note"):
+                getattr(bot, "send_" + record["kind"])(conn["chat"], record["file_id"])
+            elif record.get("file_id") and sender:
+                getattr(bot, sender)(conn["chat"], record["file_id"], caption="🗑 Удалённое вложение")
+    except Exception as e:
+        log_exception("business_messages_deleted", e)
+
+
+# ------------------------------------- игры -------------------------------------
+
+# Кнопки игр знают только номер стола: подключение и чат хранит сам стол.
+# Сообщение в нажатии кнопки Telegram присылает не всегда, а id подключения
+# в callback_data не помещается.
+
+def _biz_menu_kb(table_id):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(*[types.InlineKeyboardButton(title, callback_data=f"bz_new_{kind}_{table_id}")
+             for kind, title in BIZ_GAME_TITLES.items()][:2])
+    kb.add(types.InlineKeyboardButton(BIZ_GAME_TITLES["dice"], callback_data=f"bz_new_dice_{table_id}"))
+    return kb
+
+
+def _biz_table(connection_id, chat, conn):
+    return {"kind": None, "connection": connection_id, "chat": chat.id, "result": None,
+            "names": {conn["owner"]: conn.get("name") or "Владелец", chat.id: chat.first_name or "Собеседник"}}
+
+
+def _biz_send_menu(connection_id, chat, conn):
+    table_id = short_id()
+    biz_games[table_id] = _biz_table(connection_id, chat, conn)
+    bot.send_message(chat.id, "🎮 Сыграем? Выбирайте игру — играем вдвоём прямо здесь:",
+                     reply_markup=_biz_menu_kb(table_id), business_connection_id=connection_id)
+
+
+def _biz_new_state(table, kind, owner):
+    """Новая партия за тем же столом: тот же чат, те же игроки."""
+    state = biz_core.new_game(kind, owner, table["chat"])
+    state.update(connection=table["connection"], chat=table["chat"], names=dict(table["names"]))
+    return state
+
+
+def _biz_start_game(connection_id, chat, conn, kind):
+    gid = short_id()
+    state = biz_games[gid] = _biz_new_state(_biz_table(connection_id, chat, conn), kind, conn["owner"])
+    bot.send_message(chat.id, _biz_game_text(state), reply_markup=_biz_game_kb(gid, state),
+                     business_connection_id=connection_id)
+
+
+def _biz_name(state, uid):
+    return state["names"].get(uid) or state["names"].get(str(uid)) or "Игрок"
+
+
+def _biz_game_text(state):
+    title = BIZ_GAME_TITLES[state["kind"]]
+    a, b = state["players"]
+    if state["kind"] == "ttt":
+        lines = [title, "", f"❌ {_biz_name(state, a)}  vs  ⭕ {_biz_name(state, b)}"]
+        result = state["result"]
+        if result is None:
+            lines.append(f"Ходит {'❌' if state['turn'] == 0 else '⭕'} {_biz_name(state, state['players'][state['turn']])}")
+        elif result == "draw":
+            lines.append("🤝 Ничья — поле заполнено")
+        else:
+            lines.append(f"🏆 Победа: {_biz_name(state, state['players'][0 if result == 'X' else 1])}!")
+        return "\n".join(lines)
+
+    moves = state["moves"]
+    lines = [title, ""]
+    if state["result"] is None:
+        for uid in (a, b):
+            if state["kind"] == "rps":
+                mark = "✅ ход сделан" if uid in moves else "🤔 думает…"
+            elif moves.get(uid):
+                mark = f"🎲 {moves[uid]}"
+            else:
+                mark = "🎲 кубик летит…" if uid in moves else "⏳ ещё не бросал(а)"
+            lines.append(f"{_biz_name(state, uid)} — {mark}")
+        lines += ["", "Ходы скрыты, пока не сходят оба 🤫" if state["kind"] == "rps"
+                  else "У кого больше — тот и победил"]
+        return "\n".join(lines)
+    for uid in (a, b):
+        shown = biz_core.RPS_MOVES[moves[uid]] if state["kind"] == "rps" else f"🎲 {moves[uid]}"
+        lines.append(f"{_biz_name(state, uid)}: {shown}")
+    lines.append("")
+    lines.append("🤝 Ничья!" if state["result"] == "draw" else f"🏆 Победа: {_biz_name(state, state['result'])}!")
+    return "\n".join(lines)
+
+
+def _biz_game_kb(gid, state):
+    kb = types.InlineKeyboardMarkup()
+    if state["result"] is not None:
+        kb.row(types.InlineKeyboardButton("🔁 Ещё раз", callback_data=f"bz_again_{gid}"),
+               types.InlineKeyboardButton("🎮 Другая игра", callback_data=f"bz_menu_{gid}"))
+        if state["kind"] != "ttt":
+            return kb
+    if state["kind"] == "rps" and state["result"] is None:
+        kb.row(*[types.InlineKeyboardButton(label, callback_data=f"bz_rps_{gid}_{move}")
+                 for move, label in biz_core.RPS_MOVES.items()])
+    elif state["kind"] == "dice" and state["result"] is None:
+        kb.add(types.InlineKeyboardButton("🎲 Бросить кубик", callback_data=f"bz_dice_{gid}"))
+    elif state["kind"] == "ttt":
+        win = set(biz_core.ttt_line(state["board"]))
+        rows = []
+        for row in range(3):
+            buttons = []
+            for cell in range(row * 3, row * 3 + 3):
+                mark = state["board"][cell]
+                label = {"X": "❌", "O": "⭕"}.get(mark, "·")
+                if cell in win:
+                    label = "🔥" + label
+                buttons.append(types.InlineKeyboardButton(label, callback_data=f"bz_ttt_{gid}_{cell}"))
+            rows.append(buttons)
+        game_kb = types.InlineKeyboardMarkup()
+        for buttons in rows:
+            game_kb.row(*buttons)
+        for buttons in kb.keyboard:
+            game_kb.row(*buttons)
+        return game_kb
+    return kb
+
+
+def _biz_edit(call, gid, state, text=None, reply_markup=None):
+    bot.edit_message_text(text or _biz_game_text(state), chat_id=state["chat"], message_id=call.message.message_id,
+                          business_connection_id=state["connection"],
+                          reply_markup=reply_markup or _biz_game_kb(gid, state))
+
+
+def _biz_finish(gid, state, winner):
+    """winner — uid победителя или None при ничьей; записываем партию обоим."""
+    state["result"] = winner if winner is not None else "draw"
+    game_key = BIZ_GAME_KEYS[state["kind"]]
+    session = f"bz_{gid}_{state.get('round', 0)}"
+    for uid in state["players"]:
+        name = _biz_name(state, uid)
+        _record_game_play_once(uid, game_key, session, display_name=name)
+        outcome = "draws" if winner is None else "wins" if uid == winner else "losses"
+        _record_game_result_once(uid, game_key, outcome, session)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("bz_"))
+def business_game_callback(call):
+    uid = call.from_user.id
+    try:
+        parts = call.data.split("_")
+        # bz_new_<игра>_<стол>, остальные: bz_<действие>_<стол>[_<ход>]
+        action = parts[1]
+        gid = parts[3] if action == "new" and len(parts) > 3 else parts[2] if len(parts) > 2 else ""
+        state = biz_games.get(gid)
+        if not state or not call.message:
+            bot.answer_callback_query(call.id, "Стол устарел — начните заново: напишите в переписке .игры")
+            return
+        conn = _biz_connection(state["connection"])
+        if not conn or not conn.get("enabled"):
+            bot.answer_callback_query(call.id, "Бот уже отключён от этого аккаунта")
+            return
+        if uid not in (conn["owner"], state["chat"]):
+            bot.answer_callback_query(call.id, "Это игра для двоих из этой переписки 🙂")
+            return
+
+        if action == "menu":
+            bot.answer_callback_query(call.id)
+            _biz_edit(call, gid, state, "🎮 Во что сыграем?", _biz_menu_kb(gid))
+            return
+        if action in ("new", "again"):
+            if _maintenance_applies(uid):
+                bot.answer_callback_query(call.id, _maintenance_alert(uid), show_alert=True)
+                return
+            kind = parts[2] if action == "new" else state.get("kind")
+            if kind not in BIZ_GAME_TITLES:
+                bot.answer_callback_query(call.id)
+                return
+            fresh = _biz_new_state(state, kind, conn["owner"])
+            fresh["round"] = int(state.get("round", 0)) + 1
+            state = biz_games[gid] = fresh
+            bot.answer_callback_query(call.id, "Поехали!")
+            _biz_edit(call, gid, state)
+            return
+
+        if state["result"] is not None:
+            bot.answer_callback_query(call.id, "Партия уже закончилась — жмите «Ещё раз»")
+            return
+
+        if action == "rps":
+            move = parts[3]
+            if move not in biz_core.RPS_MOVES:
+                bot.answer_callback_query(call.id)
+                return
+            if uid in state["moves"]:
+                bot.answer_callback_query(call.id, "Вы уже сходили — ждём соперника")
+                return
+            state["moves"][uid] = move
+            bot.answer_callback_query(call.id, f"Ход принят: {biz_core.RPS_MOVES[move]} 🤫")
+            if len(state["moves"]) == 2:
+                a, b = state["players"]
+                verdict = biz_core.rps_winner(state["moves"][a], state["moves"][b])
+                _biz_finish(gid, state, None if verdict == 0 else a if verdict == 1 else b)
+            _biz_edit(call, gid, state)
+
+        elif action == "ttt":
+            cell = int(parts[3])
+            if state["players"][state["turn"]] != uid:
+                bot.answer_callback_query(call.id, "Сейчас ход соперника")
+                return
+            if state["board"][cell]:
+                bot.answer_callback_query(call.id, "Клетка занята")
+                return
+            state["board"][cell] = "X" if state["turn"] == 0 else "O"
+            state["turn"] = 1 - state["turn"]
+            outcome = biz_core.ttt_winner(state["board"])
+            bot.answer_callback_query(call.id)
+            if outcome:
+                _biz_finish(gid, state, None if outcome == "draw" else state["players"][0 if outcome == "X" else 1])
+                state["result"] = outcome
+            _biz_edit(call, gid, state)
+
+        elif action == "dice":
+            if uid in state["moves"]:
+                bot.answer_callback_query(call.id, "Вы уже бросили — ждём соперника")
+                return
+            state["moves"][uid] = 0                       # бросок занят, пока летит кубик
+            bot.answer_callback_query(call.id, "Бросаем! 🎲")
+            sent = bot.send_dice(state["chat"], "🎲", business_connection_id=state["connection"])
+            value = getattr(getattr(sent, "dice", None), "value", None) or random.randint(1, 6)
+
+            def reveal():
+                try:
+                    state["moves"][uid] = value
+                    if len(state["moves"]) == 2 and all(state["moves"].values()):
+                        a, b = state["players"]
+                        va, vb = state["moves"][a], state["moves"][b]
+                        _biz_finish(gid, state, None if va == vb else a if va > vb else b)
+                    _biz_edit(call, gid, state)
+                except Exception as e:
+                    log_exception("business_dice_reveal", e)
+            threading.Timer(BIZ_DICE_DELAY, reveal).start()
+        else:
+            bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("business_game", e, user_id=uid)
+        try:
+            bot.answer_callback_query(call.id, "Что-то пошло не так — попробуйте ещё раз")
+        except Exception:
+            pass
+
+
+# ---------------------------- /business и /connect ----------------------------
+
+def _business_howto():
+    return (
+        "💼 <b>Бот в вашем личном аккаунте — через Telegram Business</b>\n\n"
+        f"После подключения:\n{BIZ_FEATURES}\n\n"
+        "<b>Как подключить</b> (нужен Telegram Premium):\n"
+        "1. Настройки → Telegram для бизнеса → Чат-боты\n"
+        f"2. Впишите <code>@{INLINE_BOT_USERNAME}</code> и выберите бота\n"
+        "3. Разрешите: читать сообщения, отвечать, удалять сообщения\n"
+        "4. Выберите, в каких чатах работать, — и готово. Я напишу сюда, когда всё заработает."
+    )
+
+
+def _business_status(uid):
+    conns = [c for c in _biz["connections"].values() if c.get("owner") == uid and c.get("enabled")]
+    if not conns:
+        return _business_howto(), None
+    conn = conns[0]
+    settings = _biz_settings(uid)
+    user = _biz["users"].get(str(uid)) or {}
+    mutes = [key for key, until in _biz["mutes"].items()
+             if key.split(":")[0] in {cid for cid, c in _biz["connections"].items() if c.get("owner") == uid}
+             and biz_core.mute_active(until)]
+    consent = {True: "согласие дано — считаем только время подключения", False: "отказались — время не считаем",
+               None: "ещё не ответили"}[user.get("consent")]
+    lines = [
+        "💼 <b>Telegram Business подключён</b>", "",
+        f"🗑 Удалённые сообщения: {'сообщаю' if settings['deleted'] else 'выключено'}",
+        f"✏️ Изменённые сообщения: {'сообщаю' if settings['edited'] else 'выключено'}",
+        f"🔇 Заглушено собеседников: {len(mutes)}",
+        f"📊 Телеметрия: {consent}",
+    ]
+    missing = _biz_missing_rights(conn)
+    if missing:
+        lines += ["", "⚠️ Не хватает прав:"] + [f"• {item}" for item in missing]
+    lines += ["", "Команды в переписке:", BIZ_FEATURES]
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton(f"🗑 {'Выключить' if settings['deleted'] else 'Включить'} удалённые",
+                                      callback_data="bzs_deleted"),
+           types.InlineKeyboardButton(f"✏️ {'Выключить' if settings['edited'] else 'Включить'} изменённые",
+                                      callback_data="bzs_edited"))
+    if user.get("consent"):
+        kb.add(types.InlineKeyboardButton("📊 Отозвать согласие на телеметрию", callback_data="bzc_no"))
+    else:
+        kb.add(types.InlineKeyboardButton("📊 Разрешить телеметрию", callback_data="bzc_yes"))
+    return "\n".join(lines), kb
+
+
+@bot.message_handler(commands=["business", "connect"])
+def business_cmd(message):
+    if message.chat.type != "private":
+        bot.send_message(message.chat.id, "Настройки Telegram Business — в личке с ботом 🙂")
+        return
+    text, kb = _business_status(message.from_user.id)
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data in ("bzs_deleted", "bzs_edited"))
+def business_settings_callback(call):
+    uid = call.from_user.id
+    key = call.data[len("bzs_"):]
+    flipped = not _biz_settings(uid)[key]
+    _biz_store(lambda state: state["settings"].setdefault(str(uid), {}).__setitem__(key, flipped))
+    bot.answer_callback_query(call.id, "Включено" if flipped else "Выключено")
+    text, kb = _business_status(uid)
+    safe_edit_message(call, text, reply_markup=kb, parse_mode="HTML")
+
+
+def _admin_business_text():
+    summary = biz_core.telemetry_summary(_biz["users"])
+    # Про отказавшихся показываем только то, что они подключали бота
+    return (
+        "💼 <b>Telegram Business</b>\n\n"
+        f"👥 Всего подключали: <b>{summary['total']}</b>\n\n"
+        "📊 Телеметрия (только у согласившихся):\n"
+        f"• согласились: {summary['consented']}, отказались: {summary['declined']}, "
+        f"не ответили: {summary['total'] - summary['consented'] - summary['declined']}\n"
+        f"• подключены сейчас: {summary['connected']}\n"
+        f"• время подключения: всего {biz_core.human_duration(summary['seconds_total'])}, "
+        f"в среднем {biz_core.human_duration(summary['seconds_avg'])}"
+    )
+
+
+_biz_load()
+
+
+# ---------------------------------------------------------------------------
 # Технические работы
 #
 # Пока они идут, новые партии не начинаются: /start, игровые команды,
@@ -6351,11 +7046,8 @@ def _maintenance_reply_message(message):
             with user_record(uid) as rec:
                 rec["started"] = True
                 rec.pop("bot_blocked", None)
-        extra = {}
-        if getattr(message, "business_connection_id", None):
-            extra["business_connection_id"] = message.business_connection_id
         bot.send_message(message.chat.id, _maintenance_text(uid), parse_mode="HTML",
-                         reply_markup=_maintenance_kb(uid), **extra)
+                         reply_markup=_maintenance_kb(uid))
     except Exception as e:
         log_exception("maintenance_message", e, user_id=uid, chat_id=message.chat.id)
 
@@ -6374,7 +7066,9 @@ def _maintenance_intercept(update):
             return False
         bot._exec_task(_maintenance_reply_callback, call)
         return True
-    message = update.message or update.business_message
+    # Переписки Telegram Business сюда не попадают: там игры придерживает сам
+    # бизнес-модуль, а удаления, правки и .mute работают и во время тех. работ.
+    message = update.message
     if message is None or message.from_user is None or not _maintenance_applies(message.from_user.id):
         return False
     kind = _maintenance_message_kind(message)
@@ -6473,7 +7167,7 @@ def _admin_panel_kb():
     kb.row(btn("🏆 Достижения", "admin_achievements"), btn("💾 Backup", "admin_backup"))
     kb.row(btn("📣 Рассылка", "admin_broadcast"), btn("🎉 Ивенты", "admin_events"))
     fresh = sum(1 for item in _idea_items() if item.get("status") == "new")
-    kb.row(btn(f"💡 Предложения{f' ({fresh} новых)' if fresh else ''}", "admin_ideas"))
+    kb.row(btn(f"💡 Предложения{f' ({fresh} новых)' if fresh else ''}", "admin_ideas"), btn("💼 Бизнес", "admin_business"))
     if maintenance_active():
         kb.row(btn("✏️ Текст для игроков", "admin_mnt_note"), btn("👁 Как видят игроки", "admin_mnt_preview"))
         kb.row(btn("✅ Завершить тех. работы", "admin_mnt_off"))
@@ -7011,6 +7705,11 @@ def admin_panel_callbacks(call):
         safe_edit_message(call, _idea_text(idea), reply_markup=kb, parse_mode="HTML")
         return
 
+    if data == "admin_business":
+        _admin_answer(call)
+        safe_edit_message(call, _admin_business_text(), reply_markup=_admin_back_kb(data), parse_mode="HTML")
+        return
+
     if data == "admin_events":
         _admin_answer(call)
         safe_edit_message(call, _admin_events_text(), reply_markup=_admin_events_kb(), parse_mode="HTML")
@@ -7515,28 +8214,6 @@ def flappybird(message):
         bot.send_message(message.chat.id, "Чтобы играть в flappy Bird - откройте ЛС с ботом и нажмите эту кнопку там.")
         return
     _start_flappy_pm(message.chat.id, message.from_user.id)
-
-@bot.message_handler(commands=["connect"])
-def connect(message):
-    bot.send_message(
-        message.chat.id,
-        "⚙️ <b>Подключение через Telegram Business</b>\n\n"
-        "ВНИМАНИЕ! Сейчас в разработке!\n"
-        "AI-функции в business-режиме отключены.\n\n"
-        "<b>Доступные игры (этап 1):</b>\n"
-        "• тетрис\n"
-        "• 2048\n"
-        "• кнб (камень-ножницы-бумага)\n"
-        "• угадай число\n"
-        "• казино\n"
-        "• орёл или решка\n\n"
-        "<b>Как подключить:</b>\n"
-        f"1. Скопируйте имя <code>@{INLINE_BOT_USERNAME}</code>\n"
-        "2. Откройте: Настройки → Telegram для бизнеса → Чат-боты\n"
-        "3. Добавьте бота и примените настройки\n\n"
-        "После подключения просто отправьте в бизнес-чат название игры.",
-        parse_mode="HTML",
-    )
 
 def _support_text():
     return "🛠 Выберите действие:"
