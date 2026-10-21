@@ -819,7 +819,7 @@ function showIdeaThanks(out) {
 
 const FRAME_DECOR = {
   gold: ['✨', '✨'], neon: ['⚡', '⚡'], news: ['📰', '📰'],
-  web: ['🕸', '🕷'], anniversary: ['🎂', '🎉']
+  web: ['🕸', '🕷'], anniversary: ['🎂', '🎉'], moon: ['🌕', '🦇']
 };
 
 function avatarNode() {

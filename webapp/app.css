@@ -606,6 +606,7 @@ body.with-tabs main {
 .avatar.frame-neon { box-shadow: 0 0 0 2px #4ef0e1, 0 0 18px rgba(78, 240, 225, .5); }
 .avatar.frame-web { box-shadow: 0 0 0 2px #9a9a9a, 0 0 14px rgba(255, 140, 40, .35); }
 .avatar.frame-anniversary { box-shadow: 0 0 0 2px #ff8fb3, 0 0 18px rgba(255, 143, 179, .5); }
+.avatar.frame-moon { box-shadow: 0 0 0 2px #f4e3a1, 0 0 20px rgba(244, 227, 161, .55); }
 .avatar.frame-news { box-shadow: 0 0 0 2px var(--accent); }
 .hero .titles { font-size: 12px; color: var(--warn); margin-top: 2px; }
 

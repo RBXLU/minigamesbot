@@ -6,6 +6,7 @@ FRAME_DECOR = {
     "news": ("📰", "📰"),
     "web": ("🕸", "🕷"),
     "anniversary": ("🎂", "🎉"),
+    "moon": ("🌕", "🦇"),
 }
 THEME_BULLET = {
     "dark": "▪️",

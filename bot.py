@@ -1820,6 +1820,7 @@ EVENT_SHOP_ITEMS = {
 # Не продаются: выдаются за общую цель ивента и за годовщину.
 REWARD_ITEMS = {
     "avatar_full_moon": {"name": "Аватар: Полная луна", "type": "avatar", "value": "🌕", "price": 0},
+    "frame_full_moon": {"name": "Рамка: Полнолуние", "type": "frame", "value": "moon", "price": 0},
     "frame_anniversary": {"name": "Рамка: 1 год", "type": "frame", "value": "anniversary", "price": 0},
     "avatar_cake": {"name": "Аватар: Торт", "type": "avatar", "value": "🎂", "price": 0},
     "theme_anniversary": {"name": "Тема: Праздник", "type": "theme", "value": "anniversary", "price": 0},
@@ -1889,15 +1890,23 @@ def _fmt_num(value):
 def _reward_text(reward):
     parts = []
     if reward.get("coins"):
-        parts.append(f"{reward['coins']} 🪙")
+        parts.append(f"{_fmt_num(reward['coins'])} 🪙")
     if reward.get("xp"):
         parts.append(f"{reward['xp']} XP")
     if reward.get("pumpkins"):
         parts.append(f"{reward['pumpkins']} 🎃")
-    if reward.get("item"):
-        item = _shop_item(reward["item"])
-        parts.append(item["name"] if item else reward["item"])
+    for item_id in _reward_items(reward):
+        item = _shop_item(item_id)
+        parts.append(item["name"] if item else item_id)
     return ", ".join(parts) or "—"
+
+
+def _reward_items(reward):
+    """Предметы награды: одиночный "item" или список "items"."""
+    items = list(reward.get("items") or [])
+    if reward.get("item"):
+        items.insert(0, reward["item"])
+    return items
 
 
 def _hw_ranking():
@@ -2119,12 +2128,7 @@ def _hw_claim(call, uid):
         bucket = _hw_bucket(rec)
         for need in ev.claimable_goals(total, bucket):
             reward = ev.goal_reward(need)
-            if reward.get("coins"):
-                rec["coins"] = int(rec.get("coins", 0) or 0) + int(reward["coins"])
-            if reward.get("item"):
-                inv = rec.setdefault("inventory", [])
-                if reward["item"] not in inv:
-                    inv.append(reward["item"])
+            _grant_reward(rec, reward)
             bucket["claimed_goals"].append(need)
             granted.append(_reward_text(reward))
     if granted:
@@ -2178,10 +2182,10 @@ def _grant_reward(rec, reward):
     """Монеты, предмет и титул из награды — в запись игрока."""
     if reward.get("coins"):
         rec["coins"] = int(rec.get("coins", 0) or 0) + int(reward["coins"])
-    if reward.get("item"):
-        inv = rec.setdefault("inventory", [])
-        if reward["item"] not in inv:
-            inv.append(reward["item"])
+    inv = rec.setdefault("inventory", [])
+    for item_id in _reward_items(reward):
+        if item_id not in inv:
+            inv.append(item_id)
     if reward.get("title"):
         titles = rec.get("titles")
         if not isinstance(titles, list):
@@ -14598,7 +14602,7 @@ def _hub_text(uid):
     name = html.escape(str(user.get("display_name") or f"user_{uid}"))
     frame = {
         "gold": ("✨", "✨"), "neon": ("⚡", "⚡"), "news": ("📰", "📰"),
-        "web": ("🕸", "🕷"), "anniversary": ("🎂", "🎉"),
+        "web": ("🕸", "🕷"), "anniversary": ("🎂", "🎉"), "moon": ("🌕", "🦇"),
     }.get(user.get("frame_style"), ("", ""))
     head = f"{user.get('avatar_emoji', '🙂')} <b>{name}</b>"
     if frame[0]:
