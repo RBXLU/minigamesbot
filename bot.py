@@ -441,7 +441,7 @@ WHATS_NEW_RELEASES = {
         "ru": [
             "🎃 «Ночь тыкв» с 25 октября по 2 ноября: собирайте тыквы в играх и на охоте в группах, "
             "тратьте их в хеллоуин-лавке. Всё — в /event.",
-            "👥 Общая цель: соберём вместе 30 000 тыкв — награду получит каждый участник.",
+            "👥 Общая цель: соберём вместе 10 000 тыкв — награду получит каждый участник.",
             "🪦 На время ивента сапёр превращается в «Кладбище», в виселице — жуткие слова, "
             "в крестиках-ноликах 🎃 против 👻.",
             "🏆 Топ тыкв: первые 10 получат титул «Король тыкв 2026» — его не купить.",
@@ -453,7 +453,7 @@ WHATS_NEW_RELEASES = {
         "en": [
             "🎃 Pumpkin Night, Oct 25 – Nov 2: collect pumpkins in games and on hunts in group chats, "
             "spend them in the Halloween shop. Everything is in /event.",
-            "👥 Community goal: let's collect 30,000 pumpkins together — every participant gets a reward.",
+            "👥 Community goal: let's collect 10,000 pumpkins together — every participant gets a reward.",
             "🪦 During the event Minesweeper becomes the Graveyard, Hangman gets spooky words "
             "and tic-tac-toe is 🎃 vs 👻.",
             "🏆 Pumpkin leaderboard: the top 10 get the King of Pumpkins 2026 title — it can't be bought.",
@@ -465,7 +465,7 @@ WHATS_NEW_RELEASES = {
         "uk": [
             "🎃 «Ніч гарбузів» з 25 жовтня по 2 листопада: збирайте гарбузи в іграх і на полюванні в групах, "
             "витрачайте їх у хелловін-крамниці. Усе — в /event.",
-            "👥 Спільна мета: зберемо разом 30 000 гарбузів — нагороду отримає кожен учасник.",
+            "👥 Спільна мета: зберемо разом 10 000 гарбузів — нагороду отримає кожен учасник.",
             "🪦 На час івенту сапер стає «Цвинтарем», у шибениці — моторошні слова, "
             "у хрестиках-нуликах 🎃 проти 👻.",
             "🏆 Топ гарбузів: перші 10 отримають титул «Король гарбузів 2026» — його не купити.",
@@ -1025,6 +1025,93 @@ bot.send_message = send_message_with_news_emoji
 bot.reply_to = reply_to_with_news_emoji
 bot.edit_message_text = edit_message_text_with_news_emoji
 bot.answer_inline_query = answer_inline_query_with_news_emoji
+
+
+# ---------------------------------------------------------------------------
+# Победа: монеты и эффект победы
+#
+# Партия записывает победу и тут же перерисовывает своё сообщение — в том же
+# потоке. Поэтому победа кладёт строку-поздравление в очередь потока, а ближайшая
+# отправка или правка сообщения дописывает её в конец: «👑👑👑 Победа — Аня!
+# +10 🪙». Эмодзи — купленный в магазине эффект победы. Так награда видна во
+# всех чат-играх, а не только в тех, где её не забыли нарисовать.
+# ---------------------------------------------------------------------------
+COINS_PER_WIN = int(os.getenv("COINS_PER_WIN", "10"))
+# Поздравление старше этого не дописываем: значит, партия ничего не перерисовала
+VICTORY_NOTE_TTL = 5.0
+# Эффект «🎉» для новых сообщений в личке (Telegram умеет только там)
+VICTORY_MESSAGE_EFFECT = os.getenv("VICTORY_MESSAGE_EFFECT", "5046509860389126442")
+_victory_notes = threading.local()
+
+
+def _queue_victory_note(rec, coins):
+    emoji = str(rec.get("victory_emoji") or "🎉").strip() or "🎉"
+    name = str(rec.get("display_name") or "Игрок")[:32]
+    queue = getattr(_victory_notes, "queue", None)
+    if queue is None:
+        queue = _victory_notes.queue = []
+    queue.append((time.monotonic(), emoji, name, coins))
+
+
+def _take_victory_note(parse_mode):
+    queue = getattr(_victory_notes, "queue", None)
+    if not queue:
+        return None
+    now = time.monotonic()
+    fresh = [item for item in queue if now - item[0] <= VICTORY_NOTE_TTL]
+    queue.clear()
+    if not fresh:
+        return None
+    lines = []
+    for _, emoji, name, coins in fresh:
+        if parse_mode and parse_mode.upper() == "HTML":
+            name = html.escape(name)
+        elif parse_mode:
+            name = re.sub(r"([_*`\[\]])", r"\\\1", name)
+        lines.append(f"{emoji * 3} Победа — {name}! +{coins} 🪙")
+    return "\n\n" + "\n".join(lines)
+
+
+def send_message_with_victory(chat_id, text, *args, **kwargs):
+    note = _take_victory_note(kwargs.get("parse_mode")) if isinstance(text, str) else None
+    if not note:
+        return send_message_with_news_emoji(chat_id, text, *args, **kwargs)
+    text = (text + note)[:4096]
+    if VICTORY_MESSAGE_EFFECT and isinstance(chat_id, int) and chat_id > 0 and "message_effect_id" not in kwargs:
+        try:
+            return send_message_with_news_emoji(chat_id, text, *args, message_effect_id=VICTORY_MESSAGE_EFFECT, **kwargs)
+        except ApiTelegramException as e:
+            if "effect" not in str(e).lower():
+                raise
+    return send_message_with_news_emoji(chat_id, text, *args, **kwargs)
+
+
+def edit_message_text_with_victory(text, chat_id=None, message_id=None, *args, **kwargs):
+    note = _take_victory_note(kwargs.get("parse_mode")) if isinstance(text, str) else None
+    if note:
+        text = (text + note)[:4096]
+    return edit_message_text_with_news_emoji(text, chat_id, message_id, *args, **kwargs)
+
+
+bot.send_message = send_message_with_victory
+bot.edit_message_text = edit_message_text_with_victory
+
+_original_exec_task = bot._exec_task
+
+
+def _exec_task_with_fresh_notes(task, *args, **kwargs):
+    """Каждый обработчик начинает с пустой очередью поздравлений: победа,
+    которую партия не перерисовала, не приклеится к чужому сообщению."""
+    def run(*task_args, **task_kwargs):
+        _victory_notes.queue = []
+        try:
+            return task(*task_args, **task_kwargs)
+        finally:
+            _victory_notes.queue = []
+    return _original_exec_task(run, *args, **kwargs)
+
+
+bot._exec_task = _exec_task_with_fresh_notes
 
 NVMAPI_KEY = os.getenv("NVMAPI_KEY", "").strip()
 NVMAPI_BASE_URL = os.getenv("NVMAPI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
@@ -1634,11 +1721,17 @@ def _record_game_play_once(user_id, game_key, session_id, display_name=None):
         return
     _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id)
 
-def _record_game_result(user_id, game_key, result, extra=None):
+def _record_game_result(user_id, game_key, result, extra=None, reward=True):
+    """reward=False — игра на ставку (выплату считает она сама) или итог,
+    который сообщил клиент Mini App: монеты за победу им не положены."""
     if result not in ("wins", "losses", "draws"):
         return
+    win_coins = COINS_PER_WIN if result == "wins" and reward else 0
     with user_record(user_id) as rec:
         _ensure_profile_fields(rec)
+        if win_coins:
+            rec["coins"] = int(rec.get("coins", 0) or 0) + win_coins
+            _queue_victory_note(rec, win_coins)
         gstats = rec["game_stats"] = _game_stats(rec)
         row = gstats.setdefault(game_key, {"played": 0, "wins": 0, "losses": 0, "draws": 0})
         row[result] = int(row.get(result, 0) or 0) + 1
@@ -2512,7 +2605,7 @@ def show_referral(chat_id, uid):
                      reply_markup=_referral_kb(uid), disable_web_page_preview=True)
 
 
-def _record_game_result_once(user_id, game_key, result, session_id, extra=None):
+def _record_game_result_once(user_id, game_key, result, session_id, extra=None, reward=True):
     """Итог партии засчитывается один раз.
 
     Обработчики вызываются повторно — перерисовка доски, повторное нажатие той
@@ -2520,7 +2613,7 @@ def _record_game_result_once(user_id, game_key, result, session_id, extra=None):
     """
     sid = str(session_id or "").strip()
     if not sid:
-        _record_game_result(user_id, game_key, result, extra=extra)
+        _record_game_result(user_id, game_key, result, extra=extra, reward=reward)
         return
     uniq = f"{game_key}:{sid}"
     with user_record(user_id) as rec:
@@ -2533,7 +2626,7 @@ def _record_game_result_once(user_id, game_key, result, session_id, extra=None):
             rec["scored_sessions"] = seen[-1000:]
     if duplicate:
         return
-    _record_game_result(user_id, game_key, result, extra=extra)
+    _record_game_result(user_id, game_key, result, extra=extra, reward=reward)
 
 
 def _render_replay_text(uid):
@@ -2599,8 +2692,6 @@ _CALLBACK_GAME_RULES = (
     ("wordgame_join_", "wordgame", 2, 3, True),
     ("word_", "wordgame", 1, 3, True),
     ("guess_inline_", "guess", None, 0, False),
-    ("coin_flip", "coin", None, 0, False),
-    ("slot_spin", "slot", None, 0, False),
     ("snake_", "snake", None, 0, False),
 )
 
@@ -2960,12 +3051,7 @@ def _room_finalize_vote(code):
         if chosen_key == "reaction":
             _reaction_start(room["chat_id"], room.get("creator_id"))
         elif chosen_key == "blackjack":
-            state = _bj_new_game(room.get("creator_id"), room["chat_id"])
-            gid = short_id()
-            blackjack_games[gid] = state
-            text = _bj_render_text(state, reveal_dealer=state.get("status") != "playing")
-            kb = _bj_keyboard(gid, state.get("status"))
-            msg = bot.send_message(room["chat_id"], text, reply_markup=kb)
+            msg = _bj_send_table(room["chat_id"])
             _room_track_message_id(room["chat_id"], getattr(msg, "message_id", None))
     except Exception:
         pass
@@ -3427,6 +3513,404 @@ def inline_subscription_prompt(query):
         bot.answer_inline_query(query.id, [art], cache_time=1, is_personal=True)
     except Exception:
         pass
+
+# ---------------------------------------------------------------------------
+# Предложения игроков: новая игра или улучшение бота.
+#
+# Предложить можно в боте (/idea, кнопка в меню) и в Mini App. Идея — это
+# название, подробное описание и, по желанию, наброски сообщений: текст и
+# кнопки, как они будут выглядеть в чате. Идеи лежат в state["suggestions"],
+# админы получают каждую сразу и разбирают в /adminpanel → «💡 Предложения»;
+# автору приходит ответ, когда идею берут в работу или откладывают.
+#
+# Обработчик текста диалога зарегистрирован раньше остальных текстовых
+# обработчиков (в том числе бизнес-триггеров «казино», «тетрис»): иначе
+# название «Тетрис 2» ушло бы запускать тетрис.
+# ---------------------------------------------------------------------------
+IDEA_DAILY_LIMIT = int(os.getenv("IDEA_DAILY_LIMIT", "3"))
+IDEA_KEEP = 500
+IDEA_LIMITS = {"title": (3, 80), "description": (20, 3000), "sketches": 5, "text": 1000,
+               "rows": 5, "per_row": 4, "button": 32}
+IDEA_KINDS = {"game": "🎮 Новая игра", "update": "✨ Улучшение бота"}
+IDEA_STATUS = {"new": "🆕 новая", "accepted": "✅ в работе", "declined": "💤 отложена"}
+_IDEA_BUTTON_LINE = re.compile(r"^\s*(\[[^\[\]]+\]\s*)+$")
+idea_wait = {}
+
+
+def _idea_clean_sketch(raw):
+    """Набросок {"text", "buttons": [[...]]} в допустимых размерах."""
+    if not isinstance(raw, dict):
+        raise ValueError("Набросок пришёл в непонятном виде")
+    text = str(raw.get("text") or "").strip()[:IDEA_LIMITS["text"]]
+    rows = []
+    for row in (raw.get("buttons") or [])[:IDEA_LIMITS["rows"]]:
+        labels = [str(label).strip()[:IDEA_LIMITS["button"]] for label in (row or [])[:IDEA_LIMITS["per_row"]]]
+        labels = [label for label in labels if label]
+        if labels:
+            rows.append(labels)
+    if not text and not rows:
+        raise ValueError("В наброске нет ни текста, ни кнопок")
+    return {"text": text or "…", "buttons": rows}
+
+
+def _idea_clean(payload):
+    """Проверяет идею из бота или Mini App; ValueError с понятным текстом — если что-то не так."""
+    kind = payload.get("kind") if payload.get("kind") in IDEA_KINDS else "game"
+    title = " ".join(str(payload.get("title") or "").split())
+    description = str(payload.get("description") or "").strip()
+    low, high = IDEA_LIMITS["title"]
+    if not low <= len(title) <= high:
+        raise ValueError(f"Название — от {low} до {high} символов")
+    low, high = IDEA_LIMITS["description"]
+    if len(description) < low:
+        raise ValueError(f"Опишите идею чуть подробнее — хотя бы {low} символов")
+    sketches = [_idea_clean_sketch(item) for item in (payload.get("sketches") or [])[:IDEA_LIMITS["sketches"]]]
+    return {"kind": kind, "title": title, "description": description[:high], "sketches": sketches}
+
+
+def parse_sketch_message(text):
+    """Набросок из сообщения: строки из [кнопок] в конце — ряды кнопок, остальное — текст."""
+    lines = (text or "").strip().splitlines()
+    rows = []
+    while lines and _IDEA_BUTTON_LINE.match(lines[-1]):
+        rows.insert(0, re.findall(r"\[([^\[\]]+)\]", lines.pop()))
+    return _idea_clean_sketch({"text": "\n".join(lines).strip(), "buttons": rows})
+
+
+def _idea_take_quota(uid):
+    """Не больше IDEA_DAILY_LIMIT идей в день от одного игрока; True — можно."""
+    if _is_bot_admin(uid):
+        return True
+    today = date.today().isoformat()
+    with user_record(uid) as rec:
+        day = rec.get("ideas_day")
+        if not isinstance(day, dict) or day.get("date") != today:
+            day = rec["ideas_day"] = {"date": today, "count": 0}
+        if int(day.get("count", 0)) >= IDEA_DAILY_LIMIT:
+            return False
+        day["count"] = int(day.get("count", 0)) + 1
+    return True
+
+
+def _ideas_state():
+    state = read_state_key("suggestions", {}, db_path=DB_FILE)
+    return state if isinstance(state, dict) else {}
+
+
+def _idea_items():
+    items = _ideas_state().get("items")
+    return items if isinstance(items, list) else []
+
+
+def _idea_get(idea_id):
+    return next((item for item in _idea_items() if item.get("id") == idea_id), None)
+
+
+def submit_idea(uid, name, payload, source):
+    """Сохраняет идею и сообщает админам; возвращает её. ValueError — отказ с причиной."""
+    idea = _idea_clean(payload)
+    if not _idea_take_quota(uid):
+        raise ValueError(f"На сегодня идей хватит — не больше {IDEA_DAILY_LIMIT} в день. Возвращайтесь завтра!")
+    idea.update(uid=int(uid), name=str(name or f"user_{uid}")[:64], source=source, status="new",
+                at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+    def append(state):
+        state = state if isinstance(state, dict) else {}
+        idea["id"] = int(state.get("next_id", 1))
+        state["next_id"] = idea["id"] + 1
+        items = state.get("items") if isinstance(state.get("items"), list) else []
+        items.append(idea)
+        state["items"] = items[-IDEA_KEEP:]
+        return state
+    update_state_key("suggestions", append, default={}, db_path=DB_FILE)
+    _idea_notify_admins(idea)
+    return idea
+
+
+def _idea_set_status(idea_id, status):
+    found = {}
+
+    def mutate(state):
+        state = state if isinstance(state, dict) else {}
+        for item in state.get("items") or []:
+            if item.get("id") == idea_id:
+                item["status"] = status
+                found.update(item)
+        return state
+    update_state_key("suggestions", mutate, default={}, db_path=DB_FILE)
+    return found or None
+
+
+def _idea_text(idea, full=True):
+    kind = IDEA_KINDS.get(idea.get("kind"), "💡 Идея")
+    lines = [
+        f"💡 <b>Идея #{idea.get('id', '—')}</b> · {kind}",
+        f"<b>{html.escape(idea.get('title', ''))}</b>",
+        f"от {html.escape(idea.get('name', ''))} (ID {idea.get('uid')}) · {idea.get('at', '')}"
+        f" · {'Mini App' if idea.get('source') == 'web' else 'бот'} · {IDEA_STATUS.get(idea.get('status'), '')}",
+        "",
+    ]
+    description = idea.get("description", "")
+    if not full and len(description) > 600:
+        description = description[:600] + "…"
+    lines.append(html.escape(description))
+    if idea.get("sketches"):
+        lines += ["", f"🖼 Набросков сообщений: {len(idea['sketches'])}"]
+    return "\n".join(lines)[:4000]
+
+
+def _idea_sketch_kb(sketch):
+    kb = types.InlineKeyboardMarkup()
+    for row in sketch.get("buttons") or []:
+        kb.row(*[types.InlineKeyboardButton(label, callback_data="idea_noop") for label in row])
+    return kb if sketch.get("buttons") else None
+
+
+def _idea_send_sketches(chat_id, idea):
+    for number, sketch in enumerate(idea.get("sketches") or [], 1):
+        bot.send_message(chat_id, f"🖼 Набросок {number}:\n\n{sketch['text']}", reply_markup=_idea_sketch_kb(sketch))
+
+
+def _idea_notify_admins(idea):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📂 Открыть в админ-панели", callback_data=f"admin_idea_{idea['id']}"))
+    for admin_id in BOT_ADMIN_IDS:
+        try:
+            bot.send_message(admin_id, "🔔 Новое предложение!\n\n" + _idea_text(idea, full=False),
+                             parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            LOGGER.exception("Не удалось отправить идею админу %s", admin_id)
+
+
+def _idea_notify_author(idea):
+    if idea.get("status") == "accepted":
+        text = (f"🎉 Ваша идея «{idea['title']}» понравилась команде — мы взяли её в работу!\n"
+                "Спасибо, что помогаете делать бота лучше. Следите за новостями в канале.")
+    else:
+        text = (f"💤 Идею «{idea['title']}» мы пока отложили — сейчас не получится её сделать.\n"
+                "Спасибо, что поделились! Предлагайте ещё — /idea.")
+    try:
+        bot.send_message(idea["uid"], text)
+    except Exception:
+        LOGGER.info("Автор идеи %s недоступен", idea.get("uid"))
+
+
+# --------------------------------- диалог в боте ---------------------------------
+
+IDEA_SKETCH_HELP = (
+    "🖼 Хотите показать, как это будет выглядеть в чате? Пришлите набросок сообщения — "
+    "как будто его отправил бот.\n\n"
+    "Кнопки пишите в конце, в квадратных скобках, одна строка — один ряд:\n"
+    "<code>🪨 Камень, ножницы, бумага!\n"
+    "Выберите ход:\n"
+    "[🪨 Камень] [✂️ Ножницы] [📄 Бумага]</code>\n\n"
+    "Можно до 5 сообщений, по одному. Если набросок не нужен — нажмите «Без наброска»."
+)
+
+
+def _idea_kb(*buttons):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(*[types.InlineKeyboardButton(label, callback_data=data) for label, data in buttons])
+    return kb
+
+
+def _idea_cancel_kb():
+    return _idea_kb(("✖️ Отмена", "idea_cancel"))
+
+
+def start_idea_dialog(chat_id, uid):
+    idea_wait[uid] = {"step": "kind", "sketches": []}
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton(IDEA_KINDS["game"], callback_data="idea_kind_game"),
+           types.InlineKeyboardButton(IDEA_KINDS["update"], callback_data="idea_kind_update"))
+    if _webapp_available() and _webapp_private_chat(chat_id):
+        kb.add(types.InlineKeyboardButton("📱 Удобнее в Mini App — с живым предпросмотром",
+                                          web_app=types.WebAppInfo(f"{WEBAPP_URL}/?screen=idea")))
+    kb.add(types.InlineKeyboardButton("✖️ Отмена", callback_data="idea_cancel"))
+    bot.send_message(
+        chat_id,
+        "💡 <b>Предложить игру или обновление</b>\n\n"
+        "Здорово, что у вас есть идея! Расскажите её — мы читаем каждое предложение, "
+        "а лучшие появляются в боте.\n\nЧто предлагаете?",
+        parse_mode="HTML", reply_markup=kb,
+    )
+
+
+def _idea_ask_sketch(chat_id, draft):
+    draft["step"] = "sketch"
+    count = len(draft["sketches"])
+    if count:
+        text = f"✅ Набросок {count} добавлен. Пришлите ещё один или нажмите «Готово»."
+        kb = _idea_kb(("✅ Готово", "idea_done"), ("↩️ Убрать последний", "idea_undo"))
+    else:
+        text = IDEA_SKETCH_HELP
+        kb = _idea_kb(("⏭ Без наброска", "idea_done"), ("✖️ Отмена", "idea_cancel"))
+    bot.send_message(chat_id, text, parse_mode="HTML" if not count else None, reply_markup=kb)
+
+
+def _idea_show_summary(chat_id, draft):
+    draft["step"] = "confirm"
+    preview = dict(draft, id="—", name="вы", uid="", at="сейчас", status="new")
+    bot.send_message(chat_id, "Вот что получилось 👇\n\n" + _idea_text(preview), parse_mode="HTML")
+    _idea_send_sketches(chat_id, draft)
+    bot.send_message(chat_id, "Отправляем команде?", reply_markup=_idea_kb(
+        ("🚀 Отправить", "idea_send"), ("🔁 Заново", "idea_restart"), ("✖️ Отмена", "idea_cancel")))
+
+
+def _idea_dialog_filter(message):
+    if message.chat.type != "private" or message.from_user.id not in idea_wait:
+        return False
+    text = message.text or ""
+    # Команды и кнопки меню не считаем ответом — человек ушёл из диалога
+    return bool(text) and not text.startswith("/") and text not in _menu_labels()
+
+
+_MENU_LABELS = set()
+
+
+def _menu_labels():
+    if not _MENU_LABELS:
+        for lang in TRANSLATIONS.values():
+            _MENU_LABELS.update(v for v in lang.values() if isinstance(v, str) and len(v) <= 40)
+    return _MENU_LABELS
+
+
+@bot.message_handler(func=_idea_dialog_filter)
+def idea_dialog_input(message):
+    uid = message.from_user.id
+    draft = idea_wait.get(uid)
+    text = (message.text or "").strip()
+    step = draft.get("step")
+    try:
+        if step == "title":
+            low, high = IDEA_LIMITS["title"]
+            if not low <= len(text) <= high:
+                bot.send_message(message.chat.id, f"Название — от {low} до {high} символов. Попробуйте ещё раз:",
+                                 reply_markup=_idea_cancel_kb())
+                return
+            draft["title"] = text
+            draft["step"] = "description"
+            bot.send_message(
+                message.chat.id,
+                "📝 Отлично! Теперь опишите подробно: в чём суть, как играть, сколько игроков, "
+                "за что дают монеты, чем это будет круче того, что уже есть. Чем подробнее — тем лучше.",
+                reply_markup=_idea_cancel_kb(),
+            )
+        elif step == "description":
+            if len(text) < IDEA_LIMITS["description"][0]:
+                bot.send_message(message.chat.id, "Расскажите чуть подробнее — пара предложений о том, как это работает:",
+                                 reply_markup=_idea_cancel_kb())
+                return
+            draft["description"] = text[:IDEA_LIMITS["description"][1]]
+            _idea_ask_sketch(message.chat.id, draft)
+        elif step == "sketch":
+            if len(draft["sketches"]) >= IDEA_LIMITS["sketches"]:
+                _idea_show_summary(message.chat.id, draft)
+                return
+            try:
+                sketch = parse_sketch_message(text)
+            except ValueError as e:
+                bot.send_message(message.chat.id, f"⚠️ {e}")
+                return
+            draft["sketches"].append(sketch)
+            bot.send_message(message.chat.id, f"Так это увидят игроки:\n\n{sketch['text']}",
+                             reply_markup=_idea_sketch_kb(sketch))
+            if len(draft["sketches"]) >= IDEA_LIMITS["sketches"]:
+                _idea_show_summary(message.chat.id, draft)
+            else:
+                _idea_ask_sketch(message.chat.id, draft)
+        else:
+            bot.send_message(message.chat.id, "Выберите вариант кнопкой выше 🙂")
+    except Exception as e:
+        log_exception("idea_dialog", e, user_id=uid)
+
+
+@bot.message_handler(commands=["idea", "suggest"])
+def idea_cmd(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="idea", require_subscription=False):
+        return
+    if message.chat.type != "private":
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("💡 Предложить в личке", url=f"https://t.me/{INLINE_BOT_USERNAME}?start=idea"))
+        bot.send_message(message.chat.id, "Идеи принимаем в личке с ботом — там удобнее 🙂", reply_markup=kb)
+        return
+    start_idea_dialog(message.chat.id, uid)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("idea_"))
+def idea_callbacks(call):
+    uid = call.from_user.id
+    chat_id = call.message.chat.id if call.message else uid
+    data = call.data
+    try:
+        if data == "idea_noop":
+            bot.answer_callback_query(call.id, "Это набросок — кнопки пока не работают 🙂")
+            return
+        if data == "idea_start":
+            bot.answer_callback_query(call.id)
+            start_idea_dialog(uid, uid)
+            return
+        draft = idea_wait.get(uid)
+        if data == "idea_cancel":
+            idea_wait.pop(uid, None)
+            bot.answer_callback_query(call.id, "Отменили")
+            bot.send_message(chat_id, "Хорошо, отменили. Если идея вернётся — /idea 💡")
+            return
+        if draft is None:
+            bot.answer_callback_query(call.id, "Этот черновик уже закрыт — начните заново: /idea", show_alert=True)
+            return
+        if data.startswith("idea_kind_"):
+            draft["kind"] = data[len("idea_kind_"):]
+            draft["step"] = "title"
+            bot.answer_callback_query(call.id)
+            bot.send_message(chat_id, "✏️ Как назовём? Коротко, до 80 символов.", reply_markup=_idea_cancel_kb())
+        elif data == "idea_done":
+            bot.answer_callback_query(call.id)
+            _idea_show_summary(chat_id, draft)
+        elif data == "idea_undo":
+            if draft["sketches"]:
+                draft["sketches"].pop()
+            bot.answer_callback_query(call.id, "Убрали последний набросок")
+            _idea_ask_sketch(chat_id, draft)
+        elif data == "idea_restart":
+            bot.answer_callback_query(call.id)
+            start_idea_dialog(chat_id, uid)
+        elif data == "idea_send":
+            name = call.from_user.first_name or call.from_user.username or str(uid)
+            try:
+                idea = submit_idea(uid, name, draft, "bot")
+            except ValueError as e:
+                bot.answer_callback_query(call.id, str(e)[:200], show_alert=True)
+                return
+            idea_wait.pop(uid, None)
+            bot.answer_callback_query(call.id, "Отправили!")
+            bot.send_message(
+                chat_id,
+                f"🙌 Спасибо! Идея #{idea['id']} «{idea['title']}» у команды.\n\n"
+                "Мы читаем каждое предложение. Если возьмём её в работу — обязательно напишем вам.",
+            )
+        else:
+            bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("idea_callbacks", e, user_id=uid)
+        try:
+            bot.answer_callback_query(call.id, "Что-то пошло не так — попробуйте ещё раз")
+        except Exception:
+            pass
+
+
+# ------------------------------- Mini App -------------------------------
+
+def _webapp_idea(uid, tg_user, payload):
+    if payload.get("op") == "mine":
+        mine = [item for item in _idea_items() if item.get("uid") == uid][-10:]
+        return {"ideas": [{"id": i["id"], "title": i["title"], "kind": i["kind"], "status": i["status"],
+                           "at": i.get("at", "")} for i in reversed(mine)]}
+    name = (tg_user or {}).get("first_name") or str(uid)
+    idea = submit_idea(uid, name, payload, "web")
+    return {"id": idea["id"], "title": idea["title"]}
+
 
 register_business_handlers(
     bot,
@@ -4218,13 +4702,13 @@ def poker_callback(call):
             state["status"] = "ended"
             state["stage"] = "showdown"
             _poker_apply_result(uid, state)
-            _record_game_result(uid, "poker", "losses")
+            _record_game_result(uid, "poker", "losses", reward=False)
         elif action == "next":
             _poker_advance_stage(state)
         elif action == "show":
             _poker_resolve(state)
             _poker_apply_result(uid, state)
-            _record_game_result(uid, "poker", state.get("result", "draws"))
+            _record_game_result(uid, "poker", state.get("result", "draws"), reward=False)
 
         poker_games[gid] = state
         safe_edit_message(call, _poker_render_text(state, reveal_bot=state.get("status") == "ended"), reply_markup=_poker_keyboard(gid, state))
@@ -4379,76 +4863,6 @@ def iduel_move(call):
     else:
         _edit(f"{round_line}\n\n⚔️ Раунд {st['round']}/3\n{_iduel_score_line(st)}", _iduel_kb(gid, st))
 
-
-BJ_SUITS = ["♠", "♥", "♦", "♣"]
-BJ_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
-
-def _bj_make_deck():
-    return [(r, s) for s in BJ_SUITS for r in BJ_RANKS]
-
-def _bj_card_value(rank):
-    if rank in ("J", "Q", "K"):
-        return 10
-    if rank == "A":
-        return 11
-    return int(rank)
-
-def _bj_hand_value(hand):
-    total = sum(_bj_card_value(r) for r, _ in hand)
-    aces = sum(1 for r, _ in hand if r == "A")
-    while total > 21 and aces > 0:
-        total -= 10
-        aces -= 1
-    return total
-
-def _bj_card_str(card):
-    return f"{card[0]}{card[1]}"
-
-def _bj_render_text(state, reveal_dealer=False):
-    player = state.get("player", [])
-    dealer = state.get("dealer", [])
-    player_val = _bj_hand_value(player)
-    if reveal_dealer:
-        dealer_line = f"🃏 Дилер: {' '.join(_bj_card_str(c) for c in dealer)} ({_bj_hand_value(dealer)})"
-    else:
-        dealer_line = f"🃏 Дилер: {_bj_card_str(dealer[0]) + ' ??' if dealer else '??'}"
-    player_cards = " ".join(_bj_card_str(c) for c in player) if player else "—"
-    return (
-        "🃏 Блэкджек\n"
-        f"{dealer_line}\n"
-        f"🙂 Вы: {player_cards} ({player_val})"
-    )
-
-def _bj_keyboard(gid, status):
-    kb = types.InlineKeyboardMarkup()
-    if status == "playing":
-        kb.row(
-            types.InlineKeyboardButton("➕ Взять", callback_data=f"bj_hit_{gid}"),
-            types.InlineKeyboardButton("🛑 Стоп", callback_data=f"bj_stand_{gid}")
-        )
-    else:
-        kb.add(types.InlineKeyboardButton("🔁 Новая партия", callback_data=f"bj_new_{gid}"))
-    return kb
-
-def _bj_new_game(uid, chat_id):
-    deck = _bj_make_deck()
-    random.shuffle(deck)
-    player = [deck.pop(), deck.pop()]
-    dealer = [deck.pop(), deck.pop()]
-    state = {
-        "uid": uid,
-        "chat_id": chat_id,
-        "deck": deck,
-        "player": player,
-        "dealer": dealer,
-        "status": "playing",
-        "result": None,
-        "recorded": False,
-    }
-    if _bj_hand_value(player) == 21:
-        state["status"] = "ended"
-        state["result"] = "draws" if _bj_hand_value(dealer) == 21 else "wins"
-    return state
 
 def _wordle_new_game(owner_id):
     return {
@@ -5512,8 +5926,11 @@ def start(message):
     else:
         _referral_flush(uid)
     # Ссылка t.me/<бот>?start=event из Mini App сразу открывает экран ивента.
-    if (message.text or "").split()[1:2] == ["event"] and (halloween_active() or ev.is_event_finished(ev.HALLOWEEN)):
+    payload = (message.text or "").split()[1:2]
+    if payload == ["event"] and (halloween_active() or ev.is_event_finished(ev.HALLOWEEN)):
         show_halloween(message.chat.id, uid)
+    elif payload == ["idea"] and message.chat.type == "private":
+        start_idea_dialog(message.chat.id, uid)
 
 
 @bot.message_handler(commands=["ref", "invite"])
@@ -5692,7 +6109,7 @@ _MAINTENANCE_CALLBACK_PREFIXES = (
     "quizgame_start_", "quizgame_new", "combogame_join_", "bship_join_", "bship_new_",
     "chess_join_", "chess_new_", "mafia_join_", "mafia_start_", "poker_new_", "pmttt_new_",
     "bj_new_", "wrdl_new_", "g2048_new_", "tetris_new", "hangman_new", "minesweeper_new",
-    "reaction_begin_", "coin_flip", "slot_spin", "grp_play_", "room_continue_yes_",
+    "reaction_begin_", "cbet_", "sbet_", "grp_play_", "room_continue_yes_",
     "roomrps_join_", "roomduel_join_", "roombship_join_", "roomquiz_join_", "roomquiz_start_",
     "roomcombo_join_", "roommafia_start_", "os_game_", "biz_coin_flip", "biz_slot_spin",
 )
@@ -5997,7 +6414,9 @@ def _admin_panel_kb():
     kb.row(btn("🏠 Комнаты", "admin_rooms"), btn("🧹 Закрыть комнату", "admin_close_room"))
     kb.row(btn("⛔ Бан", "admin_ban_user"), btn("✅ Разбан", "admin_unban_user"))
     kb.row(btn("🏆 Достижения", "admin_achievements"), btn("💾 Backup", "admin_backup"))
-    kb.row(btn("📣 Рассылка", "admin_broadcast"))
+    kb.row(btn("📣 Рассылка", "admin_broadcast"), btn("🎉 Ивенты", "admin_events"))
+    fresh = sum(1 for item in _idea_items() if item.get("status") == "new")
+    kb.row(btn(f"💡 Предложения{f' ({fresh} новых)' if fresh else ''}", "admin_ideas"))
     if maintenance_active():
         kb.row(btn("✏️ Текст для игроков", "admin_mnt_note"), btn("👁 Как видят игроки", "admin_mnt_preview"))
         kb.row(btn("✅ Завершить тех. работы", "admin_mnt_off"))
@@ -6014,6 +6433,50 @@ def _admin_back_kb(refresh=None):
         buttons.append(types.InlineKeyboardButton("🔄 Обновить", callback_data=refresh))
     buttons.append(types.InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_home"))
     kb.row(*buttons)
+    return kb
+
+
+_EVENT_TITLES = {ev.HALLOWEEN: "🎃 Ночь тыкв", ev.ANNIVERSARY: "🎂 1 год бота"}
+
+
+def _admin_events_text():
+    state = read_state_key("events", {}, db_path=DB_FILE) or {}
+    lines = ["🎉 <b>Ивенты</b>", ""]
+    for name, title in _EVENT_TITLES.items():
+        start, end = ev.event_window(name)
+        if ev.is_event_active(name):
+            status = "идёт" + (" (включён через EVENT_FORCE)" if not _event_in_real_window(name) else "")
+        elif ev.is_event_finished(name):
+            status = "закончился"
+        else:
+            status = "ещё не начался"
+        bucket = state.get(name) if isinstance(state.get(name), dict) else {}
+        sent_start = bucket.get(_announcement_key(name, "start"))
+        sent_end = bucket.get(_announcement_key(name, "end"))
+        lines.append(f"<b>{title}</b> — {start:%d.%m}–{end:%d.%m}, {status}")
+        lines.append(f"   📣 анонс начала: {sent_start or 'не отправлялся'}")
+        lines.append(f"   🏁 анонс конца: {sent_end or 'не отправлялся'}")
+        if name == ev.HALLOWEEN:
+            lines.append(f"   🎃 общая цель: {_fmt_num(_hw_total())} / {_fmt_num(ev.halloween_goal())}")
+        lines.append("")
+    lines.append(
+        "Анонсы уходят всем сами: в день старта и на следующий день после конца. "
+        f"С EVENT_FORCE не рассылаются. Кнопки ниже присылают анонс только вам."
+    )
+    return "\n".join(lines)
+
+
+def _admin_events_kb():
+    kb = types.InlineKeyboardMarkup()
+    for name, title in _EVENT_TITLES.items():
+        kb.row(
+            types.InlineKeyboardButton(f"👁 {title}: начало", callback_data=f"admin_evprev_start_{name}"),
+            types.InlineKeyboardButton("конец", callback_data=f"admin_evprev_end_{name}"),
+        )
+    kb.row(
+        types.InlineKeyboardButton("🔄 Обновить", callback_data="admin_events"),
+        types.InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_home"),
+    )
     return kb
 
 
@@ -6152,8 +6615,10 @@ EVENT_ANNOUNCE_INTERVAL = 600
 EVENT_ANNOUNCEMENTS_ENABLED = os.getenv("EVENT_ANNOUNCEMENTS", "1") == "1"
 
 
-def _announcement(name):
-    """(текст, фабрика клавиатуры) анонса события."""
+def _announcement(name, kind="start"):
+    """(текст, фабрика клавиатуры) анонса начала (kind="start") или конца события."""
+    if kind == "end":
+        return _end_announcement(name)
     if name == ev.HALLOWEEN:
         _, end = ev.event_window(ev.HALLOWEEN)
         text = (
@@ -6186,15 +6651,72 @@ def _announcement(name):
     return text, markup
 
 
+def _end_announcement(name):
+    if name == ev.HALLOWEEN:
+        total = _hw_total()
+        goal = ev.halloween_goal()
+        top = _hw_ranking()[:3]
+        medals = ["🥇", "🥈", "🥉"]
+        lines = [
+            "🎃 «Ночь тыкв» закончилась!",
+            "",
+            f"Вместе мы собрали {_fmt_num(total)} тыкв"
+            + (" — общая цель взята, вы невероятные 🧡" if total >= goal
+               else f" из {_fmt_num(goal)}. Спасибо каждому, кто охотился!"),
+        ]
+        if top:
+            lines += ["", "Самые ловкие охотники:"]
+            lines += [f"{medals[i]} {name} — {_fmt_num(earned)} 🎃" for i, (earned, _, name) in enumerate(top)]
+        lines += [
+            "",
+            f"Первая десятка получает титул «{HW_TITLE}».",
+            "Награды общей цели ещё можно забрать в /event — загляните, если не успели.",
+            "",
+            "Спасибо, что играли с нами! 👻",
+        ]
+        text = "\n".join(lines)
+        label, data = "🎁 Забрать награды", "hw_open"
+    else:
+        _, season_end = ev.event_window(ev.SEASON)
+        text = (
+            "🎂 Неделя дня рождения закончилась!\n\n"
+            "Спасибо, что отпраздновали её с нами — для нас это правда важно.\n\n"
+            f"Сезонный пропуск продолжается до {season_end:%d.%m}: уровни, награды и XP "
+            "за каждую партию ждут вас в /pass.\n"
+            "Ваша карточка «Мой год в MiniGames» остаётся в /year."
+        )
+        label, data = "⭐ Открыть пропуск", "hub_pass"
+
+    def markup():
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(label, callback_data=data))
+        return kb
+    return text, markup
+
+
 def _event_in_real_window(name, today=None):
     start, end = ev.event_window(name)
     return start <= (today or date.today()) <= end
 
 
-def _claim_announcement(name):
-    """Атомарно помечает анонс отправленным; True — если отмечаем впервые."""
+# Анонс конца уходит в первые дни после события. Если бот лежал дольше —
+# поздно: такое сообщение спустя неделю только путает.
+EVENT_END_ANNOUNCE_DAYS = 3
+
+
+def _event_just_ended(name, today=None):
+    days = ((today or date.today()) - ev.event_window(name)[1]).days
+    return 1 <= days <= EVENT_END_ANNOUNCE_DAYS
+
+
+def _announcement_key(name, kind):
     year = ev.event_window(name)[0].year
-    key = f"announced_{year}"
+    return f"announced_{year}" if kind == "start" else f"ended_{year}"
+
+
+def _claim_announcement(name, kind="start"):
+    """Атомарно помечает анонс отправленным; True — если отмечаем впервые."""
+    key = _announcement_key(name, kind)
     claimed = {"now": False}
 
     def mark(state):
@@ -6208,8 +6730,8 @@ def _claim_announcement(name):
     return claimed["now"]
 
 
-def _unclaim_announcement(name):
-    key = f"announced_{ev.event_window(name)[0].year}"
+def _unclaim_announcement(name, kind="start"):
+    key = _announcement_key(name, kind)
 
     def unmark(state):
         state = state if isinstance(state, dict) else {}
@@ -6224,20 +6746,24 @@ def check_event_announcements(today=None):
     if not EVENT_ANNOUNCEMENTS_ENABLED:
         return started
     for name in (ev.HALLOWEEN, ev.ANNIVERSARY):
-        if not _event_in_real_window(name, today):
+        if _event_in_real_window(name, today):
+            kind = "start"
+        elif _event_just_ended(name, today):
+            kind = "end"
+        else:
             continue
         if _broadcast_lock.locked():
             break                     # идёт другая рассылка — попробуем в следующий раз
-        if not _claim_announcement(name):
+        if not _claim_announcement(name, kind):
             continue
-        text, markup = _announcement(name)
+        text, markup = _announcement(name, kind)
         if start_broadcast(sorted(BOT_ADMIN_IDS), text, markup):
-            LOGGER.info("Анонс события %s запущен", name)
+            LOGGER.info("Анонс события %s (%s) запущен", name, kind)
             started.append(name)
         else:
             # Рассылку успели занять между проверкой и запуском — повторим позже.
-            _unclaim_announcement(name)
-            LOGGER.warning("Анонс события %s отложен: идёт другая рассылка", name)
+            _unclaim_announcement(name, kind)
+            LOGGER.warning("Анонс события %s (%s) отложен: идёт другая рассылка", name, kind)
     return started
 
 
@@ -6370,6 +6896,77 @@ def admin_panel_callbacks(call):
     if data == "admin_mnt_preview":
         _admin_answer(call)
         bot.send_message(uid, _maintenance_text(uid), parse_mode="HTML", reply_markup=_maintenance_kb(uid))
+        return
+
+    if data == "admin_ideas" or data.startswith("admin_ideas_"):
+        _admin_answer(call)
+        show_all = data == "admin_ideas_all"
+        items = [i for i in _idea_items() if show_all or i.get("status") == "new"][-12:]
+        lines = ["💡 <b>Предложения игроков</b>", ""]
+        if not items:
+            lines.append("Новых предложений нет." if not show_all else "Предложений пока нет.")
+        kb = types.InlineKeyboardMarkup()
+        for item in reversed(items):
+            mark = {"new": "🆕", "accepted": "✅", "declined": "💤"}.get(item.get("status"), "")
+            kb.add(types.InlineKeyboardButton(
+                f"{mark} #{item['id']} {IDEA_KINDS.get(item.get('kind'), '')[:2]} {item['title']}"[:60],
+                callback_data=f"admin_idea_{item['id']}"))
+        kb.row(
+            types.InlineKeyboardButton("🆕 Только новые" if show_all else "📚 Все", callback_data="admin_ideas" if show_all else "admin_ideas_all"),
+            types.InlineKeyboardButton("◀️ В админ-панель", callback_data="admin_home"),
+        )
+        lines.append(f"Игроки предлагают в /idea и в Mini App — не больше {IDEA_DAILY_LIMIT} в день.")
+        safe_edit_message(call, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+        return
+
+    if data.startswith("admin_idea"):
+        parts = data.split("_")
+        try:
+            idea_id = int(parts[-1])
+        except ValueError:
+            _admin_answer(call)
+            return
+        action = parts[2] if len(parts) == 4 else "open"
+        idea = _idea_get(idea_id)
+        if not idea:
+            _admin_answer(call, "Такого предложения нет", alert=True)
+            return
+        if action in ("accept", "decline"):
+            idea = _idea_set_status(idea_id, "accepted" if action == "accept" else "declined")
+            _idea_notify_author(idea)
+            log_admin_action(uid, f"idea_{action}", target_user_id=idea.get("uid"), details={"id": idea_id}, db_path=DB_FILE)
+            _admin_answer(call, "Автору отправили ответ ✉️", alert=True)
+        elif action == "sketch":
+            _admin_answer(call)
+            _idea_send_sketches(uid, idea)
+            return
+        else:
+            _admin_answer(call)
+        kb = types.InlineKeyboardMarkup()
+        if idea.get("status") == "new":
+            kb.row(types.InlineKeyboardButton("✅ Взять в работу", callback_data=f"admin_idea_accept_{idea_id}"),
+                   types.InlineKeyboardButton("💤 Отложить", callback_data=f"admin_idea_decline_{idea_id}"))
+        if idea.get("sketches"):
+            kb.add(types.InlineKeyboardButton(f"🖼 Показать наброски ({len(idea['sketches'])})",
+                                              callback_data=f"admin_idea_sketch_{idea_id}"))
+        kb.row(types.InlineKeyboardButton("◀️ К предложениям", callback_data="admin_ideas"),
+               types.InlineKeyboardButton("🏠 Панель", callback_data="admin_home"))
+        safe_edit_message(call, _idea_text(idea), reply_markup=kb, parse_mode="HTML")
+        return
+
+    if data == "admin_events":
+        _admin_answer(call)
+        safe_edit_message(call, _admin_events_text(), reply_markup=_admin_events_kb(), parse_mode="HTML")
+        return
+
+    if data.startswith("admin_evprev_"):
+        _, _, kind, name = data.split("_", 3)
+        if name not in _EVENT_TITLES or kind not in ("start", "end"):
+            _admin_answer(call)
+            return
+        _admin_answer(call, "Присылаю анонс — его видите только вы")
+        text, markup = _announcement(name, kind)
+        bot.send_message(uid, text, reply_markup=markup())
         return
 
     if data == "admin_stats":
@@ -7417,110 +8014,172 @@ def room_game_end_callback(call):
         except Exception:
             pass
 
+# ---------------------------------- блэкджек ----------------------------------
+# Стол живёт в blackjack_games: пока ставки нет — status "betting" и хозяина
+# нет; кто первым поставил, тот и играет эту раздачу. Раздачу считает
+# core/casino, как и в Mini App.
+
+def _bj_new_table(chat_id=None):
+    return {"uid": None, "name": "", "chat_id": chat_id, "status": "betting", "bet": 0, "hand": None}
+
+
+def _bj_cards(cards):
+    return " ".join(f"{rank}{suit}" for rank, suit in cards)
+
+
+def _bj_table_text(table):
+    hand = table.get("hand")
+    if table.get("status") == "betting" or not hand:
+        return (
+            "🃏 Блэкджек\n\n"
+            "Наберите больше дилера, но не больше 21. Победа удваивает ставку, "
+            "ничья её возвращает.\n"
+            "Выберите ставку — дилер раздаст карты."
+        )
+    view = casino.bj_public(hand)
+    hidden = " 🂠" * view["dealer_hidden"]
+    lines = [
+        f"🃏 Блэкджек · {table['name']} · ставка {table['bet']} 🪙",
+        "",
+        f"🎩 Дилер: {_bj_cards(view['dealer'])}{hidden} ({view['dealer_value']}{'+' if view['dealer_hidden'] else ''})",
+        f"🙂 {table['name']}: {_bj_cards(view['player'])} ({view['player_value']})",
+    ]
+    if view["status"] != "playing":
+        result = view["result"]
+        if result == "wins":
+            lines += ["", f"{table.get('emoji') or '🎉'} Победа! +{table['bet']} 🪙"]
+        elif result == "draws":
+            lines += ["", "🤝 Ничья — ставка вернулась"]
+        else:
+            lines += ["", f"😅 Дилер оказался сильнее — −{table['bet']} 🪙"]
+        if table.get("balance") is not None:
+            lines.append(f"💰 Баланс: {table['balance']} 🪙")
+    return "\n".join(lines)
+
+
+def _bj_table_kb(gid, table):
+    kb = types.InlineKeyboardMarkup()
+    hand = table.get("hand")
+    if hand and hand["status"] == "playing":
+        kb.row(
+            types.InlineKeyboardButton("➕ Ещё карту", callback_data=f"bj_hit_{gid}"),
+            types.InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{gid}"),
+        )
+        return kb
+    label = "🔁 Ещё · " if hand else "🃏 Ставка "
+    kb.row(*[types.InlineKeyboardButton(f"{label}{bet}", callback_data=f"bj_bet_{gid}_{bet}") for bet in CHAT_BETS])
+    return kb
+
+
+def _bj_send_table(chat_id):
+    gid = short_id()
+    table = blackjack_games[gid] = _bj_new_table(chat_id)
+    return bot.send_message(chat_id, _bj_table_text(table), reply_markup=_bj_table_kb(gid, table))
+
+
+def _bj_settle(user, gid, table):
+    """Раздача кончилась: выплата и запись партии — один раз."""
+    hand = table["hand"]
+    if hand["status"] == "playing" or table.get("settled"):
+        return
+    table["settled"] = True
+    payout = casino.payout(table["bet"], hand["result"])
+    if payout:
+        _chat_pay(user.id, payout)
+    table["balance"] = _record_luck_round(user, "blackjack", hand["result"], f"bj_{gid}_{table['round']}",
+                                          extra={"bet": table["bet"]})
+
+
 @bot.message_handler(commands=["blackjack"])
 def blackjack_cmd(message):
-    state = _bj_new_game(message.from_user.id, message.chat.id)
-    gid = short_id()
-    blackjack_games[gid] = state
-    reveal = state.get("status") != "playing"
-    text = _bj_render_text(state, reveal_dealer=reveal)
-    kb = _bj_keyboard(gid, state.get("status"))
-    msg = bot.send_message(message.chat.id, text, reply_markup=kb)
+    msg = _bj_send_table(message.chat.id)
     try:
         if message.chat.type in ("group", "supergroup"):
             _room_track_message_id(message.chat.id, getattr(msg, "message_id", None))
     except Exception:
         pass
-    if state.get("status") == "ended":
-        _record_game_play(message.from_user.id, "blackjack", display_name=message.from_user.first_name or message.from_user.username or str(message.from_user.id), session_id=f"blackjack_{gid}")
-        _record_game_result(message.from_user.id, "blackjack", state.get("result") or "draws")
+
 
 @bot.message_handler(func=lambda m: m.text == "🃏 Блэкджек")
 def blackjack_btn(message):
     blackjack_cmd(message)
 
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("bj_"))
 def blackjack_callback(call):
+    user = call.from_user
     try:
         parts = call.data.split("_")
         if len(parts) < 3:
             return
-        action = parts[1]
-        gid = parts[2]
-        state = blackjack_games.get(gid)
-        if not state:
-            bot.answer_callback_query(call.id, "Игра не найдена.")
-            return
-        if call.from_user.id != state.get("uid"):
-            bot.answer_callback_query(call.id, "Это не ваша игра.")
+        action, gid = parts[1], parts[2]
+        table = blackjack_games.get(gid)
+        if not table:
+            # Стол из памяти выгрузили (перезапуск, давно не играли) — ставим новый на то же место
+            table = blackjack_games[gid] = _bj_new_table()
+            safe_edit_message(call, _bj_table_text(table), reply_markup=_bj_table_kb(gid, table))
+            bot.answer_callback_query(call.id, "Стол обновился — выберите ставку")
             return
 
-        if action == "new":
-            state = _bj_new_game(call.from_user.id, call.message.chat.id)
-            blackjack_games[gid] = state
-            text = _bj_render_text(state, reveal_dealer=False)
-            kb = _bj_keyboard(gid, state.get("status"))
-            safe_edit_message(call, text, reply_markup=kb)
+        if action in ("bet", "new"):
+            bet = _parse_bet(parts[3]) if action == "bet" and len(parts) > 3 else None
+            if bet is None:
+                safe_edit_message(call, _bj_table_text(_bj_new_table()), reply_markup=_bj_table_kb(gid, _bj_new_table()))
+                bot.answer_callback_query(call.id)
+                return
+            hand = table.get("hand")
+            if hand and hand["status"] == "playing":
+                bot.answer_callback_query(call.id, f"Сейчас раздача у {table['name']} — дождитесь конца")
+                return
+            if hand and _deny_new_round(call):
+                return
+            with _chat_casino_lock:
+                if table.get("hand") and table["hand"]["status"] == "playing":
+                    bot.answer_callback_query(call.id, "Карты уже раздали — смотрите стол")
+                    return
+                ok, balance = _chat_take_bet(user.id, bet)
+                if not ok:
+                    _no_coins_alert(call, balance, bet)
+                    return
+                table.update(
+                    uid=user.id, name=_player_name(user), bet=bet, hand=casino.bj_new(),
+                    status="playing", settled=False, balance=None, emoji=_victory_emoji(user.id),
+                    round=int(table.get("round", 0)) + 1,
+                )
+                blackjack_games[gid] = table
+            bot.answer_callback_query(call.id, f"Ставка {bet} 🪙 — раздаю!")
+        else:
+            hand = table.get("hand")
+            if not hand or hand["status"] != "playing":
+                bot.answer_callback_query(call.id, "Раздача уже закончилась — сделайте новую ставку")
+                return
+            if user.id != table.get("uid"):
+                bot.answer_callback_query(call.id, f"Это раздача {table['name']}. Ваша — после неё 🙂")
+                return
+            with _chat_casino_lock:
+                if action == "hit":
+                    casino.bj_hit(hand)
+                elif action == "stand":
+                    casino.bj_stand(hand)
             bot.answer_callback_query(call.id)
-            return
 
-        if state.get("status") != "playing":
-            bot.answer_callback_query(call.id, "Партия уже завершена.")
-            return
-
-        if action == "hit":
-            deck = state.get("deck", [])
-            if deck:
-                state["player"].append(deck.pop())
-            state["deck"] = deck
-            player_val = _bj_hand_value(state.get("player", []))
-            if player_val > 21:
-                state["status"] = "ended"
-                state["result"] = "losses"
-            blackjack_games[gid] = state
-
-        if action == "stand":
-            deck = state.get("deck", [])
-            dealer = state.get("dealer", [])
-            while _bj_hand_value(dealer) < 17 and deck:
-                dealer.append(deck.pop())
-            state["dealer"] = dealer
-            state["deck"] = deck
-            pval = _bj_hand_value(state.get("player", []))
-            dval = _bj_hand_value(dealer)
-            if dval > 21 or pval > dval:
-                state["result"] = "wins"
-            elif pval < dval:
-                state["result"] = "losses"
-            else:
-                state["result"] = "draws"
-            state["status"] = "ended"
-            blackjack_games[gid] = state
-
-        reveal = state.get("status") != "playing"
-        text = _bj_render_text(state, reveal_dealer=reveal)
-        kb = _bj_keyboard(gid, state.get("status"))
-        safe_edit_message(call, text, reply_markup=kb)
-
-        if state.get("status") == "ended" and not state.get("recorded"):
-            state["recorded"] = True
-            blackjack_games[gid] = state
-            _record_game_play(call.from_user.id, "blackjack", display_name=call.from_user.first_name or call.from_user.username or str(call.from_user.id), session_id=f"blackjack_{gid}")
-            _record_game_result(call.from_user.id, "blackjack", state.get("result") or "draws")
+        _bj_settle(user, gid, table)
+        safe_edit_message(call, _bj_table_text(table), reply_markup=_bj_table_kb(gid, table))
+        if table.get("settled") and call.message and call.message.chat.type in ("group", "supergroup"):
             try:
-                if call.message and call.message.chat and call.message.chat.type in ("group", "supergroup"):
-                    d, rooms = _rooms_get_data()
-                    code, room = _room_find_by_chat(rooms, call.message.chat.id)
-                    if room and room.get("game") == "blackjack":
-                        _room_post_game_prompt(call.message.chat.id, code)
+                d, rooms = _rooms_get_data()
+                code, room = _room_find_by_chat(rooms, call.message.chat.id)
+                if room and room.get("game") == "blackjack":
+                    _room_post_game_prompt(call.message.chat.id, code)
             except Exception:
                 pass
-        bot.answer_callback_query(call.id)
-    except Exception:
+    except Exception as e:
+        log_exception("blackjack", e, user_id=user.id)
         try:
-            bot.answer_callback_query(call.id, "Ошибка.")
+            bot.answer_callback_query(call.id, "Карты рассыпались — попробуйте ещё раз")
         except Exception:
             pass
+
 
 @bot.message_handler(func=lambda m: m.text == "💣 Сапёр")
 def minesweeper_message(message):
@@ -7715,16 +8374,14 @@ def inline_handler(query):
                 reply_markup=egg_markup
             ))
 
-        coin_m = types.InlineKeyboardMarkup()
-        coin_m.add(types.InlineKeyboardButton(
-            localized_text(uid, "Бросить 🪙", "Flip 🪙", "Кинути 🪙"), callback_data="coin_flip"))
+        balance = int(load_user_record(uid).get("coins", 0) or 0)
+        bet_hint = f"Ставки {CHAT_BETS[0]}–{CHAT_BETS[-1]} 🪙 · у вас {balance} 🪙"
         results.append(types.InlineQueryResultArticle(
             id=f"coin_{short_id()}",
             title=f"🪙 {get_game_title(uid, 'coin')}",
-            description=get_game_description(uid, "coin"),
-            input_message_content=types.InputTextMessageContent(
-                localized_text(uid, "🪙 Орёл или решка?", "🪙 Heads or tails?", "🪙 Орел чи решка?")),
-            reply_markup=coin_m
+            description=bet_hint,
+            input_message_content=types.InputTextMessageContent(COIN_INTRO),
+            reply_markup=coin_bet_kb()
         ))
 
         wgid = short_id()
@@ -7757,14 +8414,13 @@ def inline_handler(query):
         ))
 
         bjid = short_id()
-        bjstate = _bj_new_game(starter_id, None)
-        blackjack_games[bjid] = bjstate
+        bjtable = blackjack_games[bjid] = _bj_new_table()
         results.append(types.InlineQueryResultArticle(
             id=f"blackjack_{bjid}",
             title=f"🃏 {get_game_title(uid, 'blackjack')}",
-            description=get_game_description(uid, "blackjack"),
-            input_message_content=types.InputTextMessageContent(_bj_render_text(bjstate, reveal_dealer=bjstate.get("status") != "playing")),
-            reply_markup=_bj_keyboard(bjid, bjstate.get("status"))
+            description=bet_hint,
+            input_message_content=types.InputTextMessageContent(_bj_table_text(bjtable)),
+            reply_markup=_bj_table_kb(bjid, bjtable)
         ))
 
         bgid = short_id()
@@ -7835,16 +8491,12 @@ def inline_handler(query):
                     reply_markup=markup_sys
                 ))
 
-        slot_m = types.InlineKeyboardMarkup()
-        slot_m.add(types.InlineKeyboardButton(
-            localized_text(uid, "🎰 Крутить", "🎰 Spin", "🎰 Крутити"), callback_data="slot_spin"))
         results.append(types.InlineQueryResultArticle(
             id=f"slot_{short_id()}",
             title=f"🎰 {get_game_title(uid, 'slot')}",
-            description=get_game_description(uid, "slot"),
-            input_message_content=types.InputTextMessageContent(
-                localized_text(uid, "🎰 Нажмите ниже для запуска!", "🎰 Press below to spin!", "🎰 Натисніть нижче, щоб запустити!")),
-            reply_markup=slot_m
+            description=bet_hint,
+            input_message_content=types.InputTextMessageContent(SLOT_INTRO),
+            reply_markup=slot_bet_kb()
         ))
 
         results.append(types.InlineQueryResultArticle(
@@ -11823,30 +12475,214 @@ def sys_open(call):
         bot.answer_callback_query(call.id, "Ошибка")
 
 
+# ---------------------------------------------------------------------------
+# Игры на удачу в чате и инлайне: монетка, слоты, блэкджек на монеты.
+#
+# Правила и выплаты — те же, что в Mini App (core/casino.py). Ставку платит
+# тот, кто нажал кнопку: сообщение с игрой может лежать в общем чате, и
+# сыграть из него может любой. Каждый бросок — отдельная партия.
+# ---------------------------------------------------------------------------
+CHAT_BETS = (10, 50, 100)
+COIN_SIDES = {"h": ("heads", "🦅 Орёл", "орла"), "t": ("tails", "🌙 Решка", "решку")}
+_chat_casino_lock = threading.Lock()
+
+
+def _player_name(user):
+    return (user.first_name or user.username or "Игрок")[:32]
+
+
+def _victory_emoji(uid):
+    return str(load_user_record(uid).get("victory_emoji") or "🎉").strip() or "🎉"
+
+
+def _chat_take_bet(uid, bet):
+    """(успех, баланс после списания или текущий, если монет не хватило)."""
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        coins = int(rec.get("coins", 0) or 0)
+        if coins < bet:
+            return False, coins
+        rec["coins"] = coins - bet
+        return True, coins - bet
+
+
+def _chat_pay(uid, amount):
+    with user_record(uid) as rec:
+        rec["coins"] = int(rec.get("coins", 0) or 0) + int(amount)
+        return rec["coins"]
+
+
+def _no_coins_alert(call, balance, bet):
+    bot.answer_callback_query(
+        call.id,
+        f"Не хватает монет: на балансе {balance} 🪙, а ставка {bet}. "
+        "Монеты дают за каждую партию и победу — сыграйте во что-нибудь и возвращайтесь!",
+        show_alert=True,
+    )
+
+
+def _deny_new_round(call):
+    """Новый бросок во время тех. работ — новая партия."""
+    if _maintenance_applies(call.from_user.id):
+        bot.answer_callback_query(call.id, _maintenance_alert(call.from_user.id), show_alert=True)
+        return True
+    return False
+
+
+def _parse_bet(raw):
+    try:
+        bet = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return bet if bet in CHAT_BETS else None
+
+
+def _record_luck_round(user, game_key, result, sid, extra=None):
+    """Записывает раунд в статистику; возвращает баланс после него (партия тоже даёт монеты)."""
+    name = _player_name(user)
+    _record_game_play_once(user.id, game_key, sid, display_name=name)
+    _record_game_result_once(user.id, game_key, result, sid, extra=extra, reward=False)
+    return int(load_user_record(user.id).get("coins", 0) or 0)
+
+
+# ----------------------------------- монетка -----------------------------------
+
+def coin_bet_kb():
+    kb = types.InlineKeyboardMarkup()
+    for bet in CHAT_BETS:
+        kb.row(
+            types.InlineKeyboardButton(f"🦅 Орёл · {bet}", callback_data=f"cbet_h_{bet}"),
+            types.InlineKeyboardButton(f"🌙 Решка · {bet}", callback_data=f"cbet_t_{bet}"),
+        )
+    return kb
+
+
+COIN_INTRO = (
+    "🪙 Орёл или решка?\n\n"
+    "Выберите сторону и ставку. Угадали — ставка удваивается, нет — уходит в банк. "
+    "Играет тот, кто нажал."
+)
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "coin_flip")
-def coin_flip(call):
-    _track_callback_game_play(call)
-    res = random.choice(["🪙 Орёл","🪙 Решка"])
-    bot.edit_message_text(f"Результат: {res}", inline_message_id=call.inline_message_id)
-    bot.answer_callback_query(call.id, res)
+def coin_flip_legacy(call):
+    """Кнопка из старых сообщений — показываем новый стол со ставками."""
+    safe_edit_message(call, COIN_INTRO, reply_markup=coin_bet_kb())
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("cbet_"))
+def coin_bet_callback(call):
+    user = call.from_user
+    try:
+        _, side_code, raw_bet = call.data.split("_")
+        side = COIN_SIDES.get(side_code)
+        bet = _parse_bet(raw_bet)
+        if not side or bet is None:
+            bot.answer_callback_query(call.id)
+            return
+        if _deny_new_round(call):
+            return
+        with _chat_casino_lock:
+            ok, balance = _chat_take_bet(user.id, bet)
+        if not ok:
+            _no_coins_alert(call, balance, bet)
+            return
+        bot.answer_callback_query(call.id, f"Ставка {bet} 🪙 на {side[2]}!")
+        name = _player_name(user)
+        head = f"🪙 {name} ставит {bet} 🪙 на {side[2]}…"
+        for frame in ("🌀 Монетка взлетает…", "🌀 Кружится… кружится…"):
+            safe_edit_message(call, f"{head}\n\n{frame}")
+            time.sleep(0.6)
+        got, result = casino.coin_flip(side[0])
+        won = result == "wins"
+        if won:
+            _chat_pay(user.id, casino.payout(bet, result))
+        balance = _record_luck_round(user, "coin", result, f"cbet_{short_id()}", extra={"bet": bet})
+        got_label = COIN_SIDES["h" if got == "heads" else "t"][1]
+        if won:
+            emoji = _victory_emoji(user.id)
+            outcome = f"{emoji} Угадали! +{bet} 🪙"
+        else:
+            outcome = f"😅 Мимо — −{bet} 🪙. Повезёт в следующий раз!"
+        text = f"{head}\n\nВыпало: {got_label}\n{outcome}\n💰 Баланс {name}: {balance} 🪙"
+        safe_edit_message(call, text, reply_markup=coin_bet_kb())
+    except Exception as e:
+        log_exception("coin_bet", e, user_id=user.id)
+        try:
+            bot.answer_callback_query(call.id, "Монетка укатилась — попробуйте ещё раз")
+        except Exception:
+            pass
+
+
+# ------------------------------------ слоты ------------------------------------
+
+def slot_bet_kb(again=False):
+    kb = types.InlineKeyboardMarkup()
+    label = "🔁 Ещё · " if again else "🎰 Крутить · "
+    kb.row(*[types.InlineKeyboardButton(f"{label}{bet}", callback_data=f"sbet_{bet}") for bet in CHAT_BETS])
+    return kb
+
+
+SLOT_INTRO = (
+    "🎰 Слоты\n\n"
+    "Три одинаковых — ×10, три семёрки 7️⃣ — джекпот ×20, пара — ставка возвращается.\n"
+    "Выберите ставку — крутит тот, кто нажал."
+)
+
 
 @bot.callback_query_handler(func=lambda c: c.data == "slot_spin")
-def slot_spin(call):
-    _track_callback_game_play(call)
-    symbols = ["🍒", "🍋", "🍉", "⭐", "💎", "7️⃣"]
-    roll = [random.choice(symbols) for _ in range(3)]
-    text = f"| {' | '.join(roll)} |"
-    if roll.count("7️⃣") == 3:
-        text += "\n💥💥💥"
-    elif len(set(roll)) == 1:
-        text += "\n✨✨✨"
-    elif len(set(roll)) == 2:
-        text += "\n✨✨"
-    else:
-        text += "\n🚪 "
-    bot.edit_message_text(f"🎰 результат\n {text}\n", inline_message_id=call.inline_message_id,
-                          reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🎰 Ещё раз", callback_data="slot_spin")))
-    bot.answer_callback_query(call.id, "Крутим 🚪 ")
+def slot_spin_legacy(call):
+    safe_edit_message(call, SLOT_INTRO, reply_markup=slot_bet_kb())
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sbet_"))
+def slot_bet_callback(call):
+    user = call.from_user
+    try:
+        bet = _parse_bet(call.data.split("_", 1)[1])
+        if bet is None:
+            bot.answer_callback_query(call.id)
+            return
+        if _deny_new_round(call):
+            return
+        with _chat_casino_lock:
+            ok, balance = _chat_take_bet(user.id, bet)
+        if not ok:
+            _no_coins_alert(call, balance, bet)
+            return
+        bot.answer_callback_query(call.id, f"Крутим на {bet} 🪙!")
+        name = _player_name(user)
+        reels, multiplier = casino.slot_spin()
+        head = f"🎰 {name} крутит на {bet} 🪙"
+        for shown in range(3):
+            visible = reels[:shown] + ["❔"] * (3 - shown)
+            safe_edit_message(call, f"{head}\n\n[ {' | '.join(visible)} ]")
+            time.sleep(0.5)
+        win = bet * multiplier
+        if win:
+            _chat_pay(user.id, win)
+        result = "wins" if multiplier > 1 else "draws" if multiplier == 1 else "losses"
+        balance = _record_luck_round(user, "slot", result, f"sbet_{short_id()}",
+                                     extra={"bet": bet, "reels": "".join(reels)})
+        if multiplier >= 20:
+            outcome = f"💥 ДЖЕКПОТ! {_victory_emoji(user.id) * 3} +{win - bet} 🪙"
+        elif multiplier > 1:
+            outcome = f"{_victory_emoji(user.id)} Три в ряд! ×{multiplier} → +{win - bet} 🪙"
+        elif multiplier == 1:
+            outcome = "😌 Пара — ставка вернулась"
+        else:
+            outcome = f"😅 Не в этот раз — −{bet} 🪙"
+        text = f"{head}\n\n[ {' | '.join(reels)} ]\n{outcome}\n💰 Баланс {name}: {balance} 🪙"
+        safe_edit_message(call, text, reply_markup=slot_bet_kb(again=True))
+    except Exception as e:
+        log_exception("slot_bet", e, user_id=user.id)
+        try:
+            bot.answer_callback_query(call.id, "Барабаны заело — попробуйте ещё раз")
+        except Exception:
+            pass
+
 
 def play_inline_easter_egg(inline_id):
     frames = [
@@ -12505,6 +13341,7 @@ def _webapp_profile(user_id, tg_user=None):
         "avatar": rec.get("avatar_emoji", "🙂"),
         "frame": rec.get("frame_style", "base"),
         "theme": rec.get("theme_style", "classic"),
+        "victory": str(rec.get("victory_emoji") or "🎉").strip() or "🎉",
         "titles": rec.get("titles") if isinstance(rec.get("titles"), list) else [],
         "records": _records_of(rec),
         "maintenance": _maintenance_public(user_id),
@@ -12761,7 +13598,7 @@ def _webapp_apply_result(user_id, tg_user, payload):
             if payload.get(key) is not None:
                 extra[key] = str(payload[key])[:64]
 
-        _record_game_result(user_id, game_key, result, extra=extra or None)
+        _record_game_result(user_id, game_key, result, extra=extra or None, reward=False)
 
     new_record = game_key in WEBAPP_RECORD_GAMES and _save_record(user_id, game_key, payload.get("score"))
     update_user_streak(user_id, display_name)
@@ -12796,7 +13633,7 @@ def _luck_settle(uid, game_key, bet, result, session, extra=None, multiplier=Non
     _record_game_play_once(uid, game_key, f"webapp_{session}")
     details = {"bet": bet}
     details.update(extra or {})
-    _record_game_result_once(uid, game_key, result, f"webapp_{session}", extra=details)
+    _record_game_result_once(uid, game_key, result, f"webapp_{session}", extra=details, reward=False)
     return win
 
 
@@ -12888,6 +13725,7 @@ webapp_server = create_webapp(
         "shop": _webapp_shop,
         "season": _webapp_season,
         "gift": _webapp_gift,
+        "idea": _webapp_idea,
     },
 )
 
@@ -13088,6 +13926,9 @@ def _hub_kb(uid, chat_id=None):
         types.InlineKeyboardButton(t(uid, "quests"), callback_data="hub_quests"),
         types.InlineKeyboardButton(t(uid, "invite"), callback_data="hub_invite"),
     )
+    kb.add(types.InlineKeyboardButton(
+        localized_text(uid, "💡 Предложить игру или идею", "💡 Suggest a game or idea", "💡 Запропонувати гру чи ідею"),
+        callback_data="idea_start"))
     kb.row(
         types.InlineKeyboardButton("📖 /help", callback_data="menu_help"),
         types.InlineKeyboardButton("🆕", callback_data="menu_whats_new"),

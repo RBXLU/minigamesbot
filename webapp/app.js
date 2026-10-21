@@ -175,12 +175,16 @@ const ERRORS = {
   'not owned': 'Сначала купите предмет',
   'maintenance': '🛠 Идут технические работы — новые партии ненадолго на паузе'
 };
+const IDEA_KINDS = { game: '🎮 Новая игра', update: '✨ Улучшение' };
+const IDEA_STATUS = { new: '🆕 читаем', accepted: '✅ в работе', declined: '💤 отложена' };
 
 /** Плавно докручивает число монет и подсвечивает прибыль/убыль. */
 function setCoins(profile) {
   if (!profile) return;
   const previous = PROFILE ? PROFILE.coins : null;
+  const skinChanged = !PROFILE || PROFILE.theme !== profile.theme;
   PROFILE = profile;
+  if (skinChanged) applyLook();
   updatePumpkins();
   syncMaintenance(false);
 
@@ -484,6 +488,10 @@ function buildHome(root) {
   });
   stagger(chatGrid.children);
   root.appendChild(chatGrid);
+
+  const idea = banner(root, 'idea', '💡', 'Есть идея игры?',
+    'Расскажите её нам — лучшие идеи появляются в боте', 'Предложить', () => openIdea());
+  idea.addEventListener('click', event => { if (!event.target.closest('button')) openIdea(); });
 }
 
 /* ---------- технические работы ---------- */
@@ -567,6 +575,214 @@ function maintenanceAdminBanner(root) {
   if (!info || !info.admin) return;
   banner(root, 'maint-admin', '🛠', 'Идут тех. работы',
     'Игроки видят заглушку, а вы как админ можете играть и проверять.');
+}
+
+/* ---------- предложить идею ---------- */
+
+const IDEA_DRAFT_KEY = 'minigames:idea-draft';
+const IDEA_MAX_SKETCHES = 5;
+
+function loadIdeaDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(IDEA_DRAFT_KEY) || 'null');
+    if (draft && typeof draft === 'object') return draft;
+  } catch (e) { /* приватный режим или мусор в хранилище */ }
+  return { kind: 'game', title: '', description: '', sketches: [] };
+}
+
+function saveIdeaDraft(draft) {
+  try { localStorage.setItem(IDEA_DRAFT_KEY, JSON.stringify(draft)); } catch (e) { /* не страшно */ }
+}
+
+/** «🪨 Камень | ✂️ Ножницы» по строкам → [['🪨 Камень', '✂️ Ножницы']] */
+function parseButtonRows(raw) {
+  return String(raw || '').split('\n')
+    .map(line => line.split('|').map(label => label.trim()).filter(Boolean).slice(0, 4))
+    .filter(row => row.length)
+    .slice(0, 5);
+}
+
+function field(labelText, control, hint) {
+  const wrap = el('label', 'field');
+  wrap.appendChild(el('span', 'field-label', labelText));
+  wrap.appendChild(control);
+  if (hint) wrap.appendChild(el('span', 'field-hint', hint));
+  return wrap;
+}
+
+function textInput(tag, value, placeholder, maxLength, onInput) {
+  const input = el(tag, 'input');
+  input.value = value || '';
+  input.placeholder = placeholder;
+  input.maxLength = maxLength;
+  if (tag === 'textarea') input.rows = 4;
+  input.addEventListener('input', () => onInput(input.value));
+  return input;
+}
+
+/** Сообщение в стиле чата Telegram: пузырь с текстом и кнопки под ним. */
+function sketchPreview(sketch) {
+  const box = el('div', 'tg-preview');
+  const bubble = el('div', 'tg-bubble');
+  bubble.appendChild(el('div', 'tg-name', '🎮 ' + ((CFG && CFG.bot_username) || 'Мини-игры')));
+  bubble.appendChild(el('div', 'tg-text', sketch.text || 'Текст сообщения появится здесь…'));
+  box.appendChild(bubble);
+  const rows = parseButtonRows(sketch.buttons);
+  if (rows.length) {
+    const keys = el('div', 'tg-keys');
+    rows.forEach(row => {
+      const line = el('div', 'tg-key-row');
+      row.forEach(label => line.appendChild(el('span', 'tg-key', label)));
+      keys.appendChild(line);
+    });
+    box.appendChild(keys);
+  }
+  return box;
+}
+
+function openIdea() {
+  if (maintenanceBlocks()) {
+    showMaintenance();
+    return;
+  }
+  openScreen('Предложить идею', true, root => buildIdea(root));
+}
+
+function buildIdea(root) {
+  const draft = loadIdeaDraft();
+  const save = () => saveIdeaDraft(draft);
+
+  const intro = el('div', 'panel idea-intro');
+  intro.appendChild(el('b', null, 'Расскажите, во что хотелось бы сыграть 💡'));
+  intro.appendChild(el('p', null,
+    'Мы читаем каждое предложение. Если идею возьмём в работу — бот напишет вам. ' +
+    'Черновик сохраняется сам, можно вернуться к нему позже.'));
+  root.appendChild(intro);
+
+  const seg = el('div', 'seg');
+  Object.entries(IDEA_KINDS).forEach(([kind, label]) => {
+    const b = el('button', 'seg-btn' + (draft.kind === kind ? ' on' : ''), label);
+    b.addEventListener('click', () => {
+      draft.kind = kind;
+      save();
+      haptic('tap');
+      seg.querySelectorAll('.seg-btn').forEach(x => x.classList.toggle('on', x === b));
+    });
+    seg.appendChild(b);
+  });
+  root.appendChild(seg);
+
+  root.appendChild(field('Название', textInput('input', draft.title,
+    'Например: «Морской бой на четверых»', 80, v => { draft.title = v; save(); })));
+
+  const counter = el('span', 'field-hint');
+  const updateCounter = () => {
+    const n = draft.description.trim().length;
+    counter.textContent = n < 20 ? 'Ещё ' + (20 - n) + ' ' + plural(20 - n, 'символ', 'символа', 'символов') + ' — и можно отправлять'
+      : n + ' / 3000 · правила, сколько игроков, за что дают монеты';
+  };
+  const description = textInput('textarea', draft.description,
+    'Как играть, сколько игроков, что происходит по кнопкам, за что награда…', 3000,
+    v => { draft.description = v; save(); updateCounter(); });
+  description.rows = 6;
+  const descField = field('Подробное описание', description);
+  descField.appendChild(counter);
+  updateCounter();
+  root.appendChild(descField);
+
+  sectionTitle(root, 'Набросок сообщений', 'Необязательно, но очень помогает: покажите, как игра будет выглядеть в чате');
+  const sketchesBox = el('div', 'sketches');
+  root.appendChild(sketchesBox);
+  const addBtn = button('＋ Добавить набросок', 'btn wide secondary', () => {
+    draft.sketches.push({ text: '', buttons: '' });
+    save();
+    renderSketches();
+  });
+  root.appendChild(addBtn);
+
+  function renderSketches() {
+    sketchesBox.innerHTML = '';
+    draft.sketches.forEach((sketch, index) => {
+      const card = el('div', 'panel sketch');
+      const head = el('div', 'sketch-head');
+      head.appendChild(el('b', null, 'Сообщение ' + (index + 1)));
+      head.appendChild(button('Убрать', 'btn small secondary', () => {
+        draft.sketches.splice(index, 1);
+        save();
+        renderSketches();
+      }));
+      card.appendChild(head);
+      const preview = el('div');
+      const refresh = () => {
+        preview.innerHTML = '';
+        preview.appendChild(sketchPreview(sketch));
+      };
+      card.appendChild(field('Текст', textInput('textarea', sketch.text,
+        '🪨 Камень, ножницы, бумага!\nВыберите ход:', 1000, v => { sketch.text = v; save(); refresh(); })));
+      card.appendChild(field('Кнопки', textInput('textarea', sketch.buttons,
+        '🪨 Камень | ✂️ Ножницы | 📄 Бумага', 600, v => { sketch.buttons = v; save(); refresh(); }),
+        'Одна строка — один ряд, кнопки в ряду через «|»'));
+      card.appendChild(el('div', 'field-label', 'Так увидят игроки'));
+      card.appendChild(preview);
+      refresh();
+      sketchesBox.appendChild(card);
+    });
+    addBtn.hidden = draft.sketches.length >= IDEA_MAX_SKETCHES;
+  }
+  renderSketches();
+
+  const send = button('🚀 Отправить идею', 'btn wide', async () => {
+    send.disabled = true;
+    try {
+      const payload = {
+        kind: draft.kind,
+        title: draft.title,
+        description: draft.description,
+        sketches: draft.sketches
+          .filter(sk => (sk.text || '').trim() || (sk.buttons || '').trim())
+          .map(sk => ({ text: sk.text, buttons: parseButtonRows(sk.buttons) }))
+      };
+      const out = await action('idea', payload);
+      try { localStorage.removeItem(IDEA_DRAFT_KEY); } catch (e) { /* не страшно */ }
+      showIdeaThanks(out);
+    } catch (e) {
+      haptic('lose');
+      toast(e.message, 3200);
+      send.disabled = false;
+    }
+  });
+  root.appendChild(send);
+
+  const mine = el('div');
+  root.appendChild(mine);
+  action('idea', { op: 'mine' }).then(data => {
+    if (!data.ideas || !data.ideas.length) return;
+    sectionTitle(mine, 'Ваши идеи');
+    const list = el('div', 'list');
+    data.ideas.forEach(item => {
+      const row = el('div', 'list-row');
+      row.appendChild(el('span', null, '#' + item.id + ' ' + item.title));
+      row.appendChild(el('b', null, IDEA_STATUS[item.status] || ''));
+      list.appendChild(row);
+    });
+    mine.appendChild(list);
+  }).catch(() => { /* список — приятная мелочь, без него форма работает */ });
+}
+
+function showIdeaThanks(out) {
+  openScreen('Спасибо!', true, root => {
+    const box = el('div', 'maint');
+    const art = el('div', 'maint-art idea-art');
+    art.appendChild(el('span', null, '🙌'));
+    box.appendChild(art);
+    box.appendChild(el('h1', null, 'Идея у команды!'));
+    box.appendChild(el('p', null, 'Предложение #' + out.id + ' «' + out.title + '» отправлено. ' +
+      'Мы читаем каждое — и если возьмём его в работу, бот обязательно напишет вам.'));
+    box.appendChild(button('🎮 К играм', 'btn wide', goHome));
+    box.appendChild(button('💡 Предложить ещё', 'btn wide secondary', openIdea));
+    root.appendChild(box);
+  });
+  haptic('win');
 }
 
 /* ---------- оформление игрока ---------- */
@@ -858,6 +1074,7 @@ function openGame(key, name) {
       const payload = Object.assign({ game: key, session, result: result || null }, extra || {});
       reported = true;
       haptic(result === 'wins' ? 'win' : result === 'losses' ? 'lose' : 'tap');
+      if (result === 'wins') celebrate();
       report(payload);
     },
     started() {
@@ -936,12 +1153,43 @@ function statusLine(root, text) {
   return node;
 }
 
-/** Показывает итог партии: текст + цвет + короткая вспышка. */
+/** Показывает итог партии: текст + цвет + короткая вспышка, а победу — салютом. */
 function showOutcome(node, text, result) {
   node.textContent = text;
   node.classList.toggle('win', result === 'wins');
   node.classList.toggle('lose', result === 'losses');
   replay(node, 'flash');
+  if (result === 'wins') celebrate();
+}
+
+/** Эффект победы: салют из эмодзи, купленного в лавке (по умолчанию 🎉). */
+function celebrate() {
+  // Победу сообщают и итог партии, и строка статуса — салют один
+  if (Date.now() - (celebrate.last || 0) < 1500) return;
+  celebrate.last = Date.now();
+  const emoji = (PROFILE && PROFILE.victory) || '🎉';
+  haptic('win');
+  if (REDUCED_MOTION) {
+    toast(emoji + ' Победа!', 1600);
+    return;
+  }
+  const layer = el('div', 'confetti');
+  const count = 26;
+  for (let i = 0; i < count; i++) {
+    const bit = el('span', null, i % 4 === 0 ? '✨' : emoji);
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+    const distance = 120 + Math.random() * 140;
+    bit.style.setProperty('--dx', Math.cos(angle) * distance + 'px');
+    bit.style.setProperty('--dy', Math.sin(angle) * distance - 60 + 'px');
+    bit.style.setProperty('--rot', (Math.random() * 540 - 270) + 'deg');
+    bit.style.animationDelay = Math.random() * 120 + 'ms';
+    bit.style.fontSize = 18 + Math.random() * 16 + 'px';
+    layer.appendChild(bit);
+  }
+  const big = el('div', 'confetti-big', emoji);
+  layer.appendChild(big);
+  document.body.appendChild(layer);
+  setTimeout(() => layer.remove(), 1700);
 }
 
 function hintLine(root, text) {
@@ -2208,6 +2456,26 @@ function applyTheme() {
   } catch (e) { /* старые клиенты не умеют менять цвета */ }
 }
 
+/* Темы из лавки красят акценты поверх цветов Telegram; «Dark» ещё и затемняет фон */
+const SKINS = {
+  dark: { '--accent': '#8fa6c4', '--accent-2': '#c49a6c', '--bg': '#0c0e12', '--card': '#16191f', '--card-2': '#1e222a', '--text': '#eef0f3', '--muted': '#8b93a0', '--line': 'rgba(255,255,255,.07)' },
+  cyber: { '--accent': '#12c9bd', '--accent-2': '#ff3fd0' },
+  news: { '--accent': '#2f7cf6', '--accent-2': '#f2b84b' },
+  halloween: { '--accent': '#f07a1a', '--accent-2': '#8b4dff' },
+  anniversary: { '--accent': '#f0609a', '--accent-2': '#ffb84d' }
+};
+const SKIN_KEYS = Array.from(new Set(Object.values(SKINS).flatMap(Object.keys)));
+
+/** Цвета Telegram + тема игрока. Зовём при смене любой из них. */
+function applyLook() {
+  const root = document.documentElement;
+  SKIN_KEYS.forEach(key => root.style.removeProperty(key));
+  if (tg) applyTheme();
+  const skin = SKINS[PROFILE && PROFILE.theme];
+  root.setAttribute('data-skin', skin ? PROFILE.theme : 'classic');
+  if (skin) Object.entries(skin).forEach(([key, value]) => root.style.setProperty(key, value));
+}
+
 function mix(hex, target, amount) {
   const parse = value => {
     const clean = String(value).replace('#', '');
@@ -2233,9 +2501,9 @@ async function boot() {
       tg.ready();
       tg.expand();
       if (tg.BackButton) tg.BackButton.onClick(goHome);
-      applyTheme();
+      applyLook();
       if (tg.onEvent) {
-        tg.onEvent('themeChanged', applyTheme);
+        tg.onEvent('themeChanged', applyLook);
         tg.onEvent('viewportChanged', applyViewport);
         tg.onEvent('safeAreaChanged', applyViewport);
       }
@@ -2255,6 +2523,7 @@ async function boot() {
     // Раз в минуту сверяем баланс и не начались ли тех. работы
     setInterval(() => { if (!document.hidden) refreshProfile(false); }, 60000);
 
+    if (new URLSearchParams(location.search).get('screen') === 'idea') openIdea();
     const requested = new URLSearchParams(location.search).get('game');
     if (requested && GAMES[requested]) {
       const meta = CFG.games.find(g => g[0] === requested);

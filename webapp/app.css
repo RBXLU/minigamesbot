@@ -808,3 +808,132 @@ body.with-tabs main {
 .maint-foot { margin-top: 14px; font-size: 13px; color: var(--muted); }
 
 .banner.maint-admin { background: color-mix(in srgb, var(--warn) 14%, var(--card)); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
+/* ======================= эффект победы ======================= */
+
+.confetti {
+  position: fixed;
+  left: 50%;
+  top: 42%;
+  width: 0;
+  height: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.confetti span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  animation: burst 1.4s cubic-bezier(.15, .8, .3, 1) both;
+}
+.confetti-big {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 84px;
+  animation: hero-pop 1.5s var(--ease) both;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .25));
+}
+@keyframes burst {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
+  12% { opacity: 1; }
+  70% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) + 90px)) rotate(var(--rot)) scale(1);
+  }
+}
+@keyframes hero-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.2) rotate(-20deg); }
+  25% { opacity: 1; transform: translate(-50%, -50%) scale(1.25) rotate(8deg); }
+  45% { transform: translate(-50%, -50%) scale(1) rotate(0); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -80%) scale(.9); }
+}
+
+/* ======================= предложить идею ======================= */
+
+.banner.idea { cursor: pointer; background: color-mix(in srgb, var(--accent-2) 12%, var(--card)); border-color: color-mix(in srgb, var(--accent-2) 35%, transparent); }
+.idea-intro b { font-size: 16px; }
+.idea-intro p { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.idea-art { background: color-mix(in srgb, var(--accent-2) 22%, var(--card)); }
+
+.seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 5px;
+  margin: 14px 0;
+  border-radius: 16px;
+  background: var(--card-2);
+}
+.seg-btn {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 800 14px/1.2 var(--font);
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.seg-btn.on { background: var(--card); color: var(--text); box-shadow: 0 2px 8px rgba(0, 0, 0, .12); }
+
+.field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.field-label { font-size: 13px; font-weight: 800; color: var(--muted); padding: 0 4px; }
+.field-hint { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--text);
+  font: 600 15px/1.45 var(--font);
+  padding: 12px 14px;
+  resize: vertical;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.input::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
+
+.sketches { display: flex; flex-direction: column; gap: 12px; }
+.sketch { box-shadow: none; }
+.sketch-head { display: flex; align-items: center; justify-content: space-between; }
+.btn[hidden] { display: none; }
+
+/* предпросмотр сообщения, как в чате Telegram */
+.tg-preview {
+  margin-top: 6px;
+  padding: 14px 12px;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--accent) 10%, transparent) 0 2px, transparent 3px) 0 0 / 22px 22px,
+    color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+.tg-bubble {
+  max-width: 88%;
+  padding: 8px 12px 10px;
+  border-radius: 16px 16px 16px 4px;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+}
+.tg-name { font-size: 13px; font-weight: 800; color: var(--accent); margin-bottom: 3px; }
+.tg-text { font-size: 15px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.tg-keys { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; max-width: 88%; }
+.tg-key-row { display: flex; gap: 4px; }
+.tg-key {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 9px 6px;
+  border-radius: 10px;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
