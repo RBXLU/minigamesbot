@@ -3790,12 +3790,13 @@ def idea_dialog_input(message):
                 return
             draft["title"] = text
             draft["step"] = "description"
-            bot.send_message(
-                message.chat.id,
-                "📝 Отлично! Теперь опишите подробно: в чём суть, как играть, сколько игроков, "
-                "за что дают монеты, чем это будет круче того, что уже есть. Чем подробнее — тем лучше.",
-                reply_markup=_idea_cancel_kb(),
-            )
+            if draft.get("kind") == "update":
+                ask = ("📝 Отлично! Теперь опишите подробно: что сейчас неудобно или чего не хватает, "
+                       "где именно, и как должно стать. Чем подробнее — тем лучше.")
+            else:
+                ask = ("📝 Отлично! Теперь опишите подробно: в чём суть, как играть, сколько игроков, "
+                       "за что дают монеты, чем это будет круче того, что уже есть. Чем подробнее — тем лучше.")
+            bot.send_message(message.chat.id, ask, reply_markup=_idea_cancel_kb())
         elif step == "description":
             if len(text) < IDEA_LIMITS["description"][0]:
                 bot.send_message(message.chat.id, "Расскажите чуть подробнее — пара предложений о том, как это работает:",
@@ -3864,7 +3865,10 @@ def idea_callbacks(call):
             draft["kind"] = data[len("idea_kind_"):]
             draft["step"] = "title"
             bot.answer_callback_query(call.id)
-            bot.send_message(chat_id, "✏️ Как назовём? Коротко, до 80 символов.", reply_markup=_idea_cancel_kb())
+            example = ("«Показывать баланс после каждой игры»" if draft["kind"] == "update"
+                       else "«Морской бой на четверых»")
+            bot.send_message(chat_id, f"✏️ Как назовём? Коротко, до 80 символов — например, {example}.",
+                             reply_markup=_idea_cancel_kb())
         elif data == "idea_done":
             bot.answer_callback_query(call.id)
             _idea_show_summary(chat_id, draft)

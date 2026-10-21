@@ -648,12 +648,32 @@ function openIdea() {
   openScreen('Предложить идею', true, root => buildIdea(root));
 }
 
+/** Подсказки формы под выбранный вид идеи: новая игра или улучшение бота. */
+const IDEA_COPY = {
+  game: {
+    intro: 'Расскажите, во что хотелось бы сыграть 💡',
+    title: 'Например: «Морской бой на четверых»',
+    description: 'Как играть, сколько игроков, что происходит по кнопкам, за что награда…',
+    hint: 'правила, сколько игроков, за что дают монеты',
+    sketch: 'Необязательно, но очень помогает: покажите, как игра будет выглядеть в чате'
+  },
+  update: {
+    intro: 'Что сделать в боте удобнее или веселее? ✨',
+    title: 'Например: «Показывать баланс после каждой игры»',
+    description: 'Что сейчас неудобно или чего не хватает, где именно, как должно стать…',
+    hint: 'что не так сейчас и как должно стать',
+    sketch: 'Необязательно, но очень помогает: покажите, как сообщение бота будет выглядеть после улучшения'
+  }
+};
+
 function buildIdea(root) {
   const draft = loadIdeaDraft();
   const save = () => saveIdeaDraft(draft);
+  const copy = () => IDEA_COPY[draft.kind] || IDEA_COPY.game;
 
   const intro = el('div', 'panel idea-intro');
-  intro.appendChild(el('b', null, 'Расскажите, во что хотелось бы сыграть 💡'));
+  const introTitle = el('b', null, copy().intro);
+  intro.appendChild(introTitle);
   intro.appendChild(el('p', null,
     'Мы читаем каждое предложение. Если идею возьмём в работу — бот напишет вам. ' +
     'Черновик сохраняется сам, можно вернуться к нему позже.'));
@@ -667,22 +687,22 @@ function buildIdea(root) {
       save();
       haptic('tap');
       seg.querySelectorAll('.seg-btn').forEach(x => x.classList.toggle('on', x === b));
+      applyCopy();
     });
     seg.appendChild(b);
   });
   root.appendChild(seg);
 
-  root.appendChild(field('Название', textInput('input', draft.title,
-    'Например: «Морской бой на четверых»', 80, v => { draft.title = v; save(); })));
+  const title = textInput('input', draft.title, copy().title, 80, v => { draft.title = v; save(); });
+  root.appendChild(field('Название', title));
 
   const counter = el('span', 'field-hint');
   const updateCounter = () => {
     const n = draft.description.trim().length;
     counter.textContent = n < 20 ? 'Ещё ' + (20 - n) + ' ' + plural(20 - n, 'символ', 'символа', 'символов') + ' — и можно отправлять'
-      : n + ' / 3000 · правила, сколько игроков, за что дают монеты';
+      : n + ' / 3000 · ' + copy().hint;
   };
-  const description = textInput('textarea', draft.description,
-    'Как играть, сколько игроков, что происходит по кнопкам, за что награда…', 3000,
+  const description = textInput('textarea', draft.description, copy().description, 3000,
     v => { draft.description = v; save(); updateCounter(); });
   description.rows = 6;
   const descField = field('Подробное описание', description);
@@ -690,7 +710,17 @@ function buildIdea(root) {
   updateCounter();
   root.appendChild(descField);
 
-  sectionTitle(root, 'Набросок сообщений', 'Необязательно, но очень помогает: покажите, как игра будет выглядеть в чате');
+  sectionTitle(root, 'Набросок сообщений', copy().sketch);
+  const sketchSub = root.lastChild;
+
+  function applyCopy() {
+    introTitle.textContent = copy().intro;
+    title.placeholder = copy().title;
+    description.placeholder = copy().description;
+    sketchSub.textContent = copy().sketch;
+    updateCounter();
+  }
+
   const sketchesBox = el('div', 'sketches');
   root.appendChild(sketchesBox);
   const addBtn = button('＋ Добавить набросок', 'btn wide secondary', () => {
