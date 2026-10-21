@@ -1096,6 +1096,59 @@ def edit_message_text_with_victory(text, chat_id=None, message_id=None, *args, *
 bot.send_message = send_message_with_victory
 bot.edit_message_text = edit_message_text_with_victory
 
+# ---------------------------------------------------------------------------
+# Цветные кнопки
+#
+# Telegram красит инлайн-кнопки в три цвета: зелёный — «да, вперёд», красный —
+# опасное или отмена, синий — главное действие. Цвет выбираем здесь, по тому,
+# что делает кнопка, — правило сразу работает во всех клавиатурах бота. Кнопка
+# с явно заданным style остаётся как есть; клиенты без поддержки цвета просто
+# покажут обычную кнопку.
+# ---------------------------------------------------------------------------
+_BUTTON_STYLE_RULES = (
+    # красные: опасное, отказ, выход
+    ("danger", ("admin_mnt_ask", "admin_mnt_on", "admin_ban_user", "admin_close_room", "idea_cancel",
+                "admin_idea_decline_", "room_leave_", "room_continue_no_", "find_cancel", "poker_fold_")),
+    # зелёные: подтвердить, забрать, присоединиться, начать
+    ("success", ("admin_mnt_off", "admin_unban_user", "idea_send", "admin_idea_accept_", "hub_gift",
+                 "hub_pass_claim", "hw_claim", "claim_", "check_subscription",
+                 "reaction_begin_", "quizgame_start_", "mafia_start_", "roomquiz_start_", "roommafia_start_",
+                 "room_continue_yes_", "grp_play_")),
+    # синие: главное действие экрана
+    ("primary", ("idea_start", "hub_event", "hw_open", "cbet_", "sbet_", "bj_bet_", "bj_hit_")),
+)
+
+
+def _auto_button_style(button):
+    data = button.callback_data or ""
+    if data:
+        if "_join_" in data:
+            return "success"
+        for style, prefixes in _BUTTON_STYLE_RULES:
+            if data.startswith(prefixes):
+                return style
+        return None
+    # Mini App и ссылка на канал новостей — главные двери наружу
+    if button.web_app or (button.url and button.url == _maintenance_channel_url()):
+        return "primary"
+    return None
+
+
+_original_button_to_dict = types.InlineKeyboardButton.to_dict
+
+
+def _button_to_dict_with_style(self):
+    data = _original_button_to_dict(self)
+    if "style" not in data:
+        style = _auto_button_style(self)
+        if style:
+            data["style"] = style
+    return data
+
+
+types.InlineKeyboardButton.to_dict = _button_to_dict_with_style
+
+
 _original_exec_task = bot._exec_task
 
 
