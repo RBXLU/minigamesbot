@@ -12271,7 +12271,8 @@ def bot_membership_changed(update):
 # Охота на тыквы: в оживлённый групповой чат иногда выкатывается тыква,
 # первый нажавший её забирает. Не чаще раза в PUMPKIN_HUNT_COOLDOWN на чат,
 # а неподобранная тыква укатывается через GAME_JOIN_TIMEOUT.
-pumpkin_drops = BoundedGames(ttl=GAME_JOIN_TIMEOUT)
+# previews=False: подобрать тыкву — не начать партию, тех. работы её не блокируют
+pumpkin_drops = BoundedGames(ttl=GAME_JOIN_TIMEOUT, previews=False)
 _hunt_last_drop = {}
 _hunt_lock = threading.Lock()
 
