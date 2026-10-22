@@ -190,10 +190,122 @@ class Migration_002_StructuredRuntimeTables(Migration):
         """)
 
 
+class Migration_003_PrimaryKeys(Migration):
+    """Every table gets a primary key.
+
+    CREATE TABLE IF NOT EXISTS keeps a table that already existed with an
+    older definition, so a long-lived database can still hold tables without
+    a key. Editors refuse to change rows of such tables. Each one is rebuilt:
+    with its canonical key when the columns are there (later duplicates win),
+    otherwise with a new "id" column. Data and indexes are kept.
+    """
+
+    version = 3
+    description = "Rebuild tables without a primary key"
+
+    CANONICAL_KEYS = {
+        "meta": ["key"],
+        "users": ["user_id"],
+        "state": ["key"],
+        "ratings": ["user_id", "game_key"],
+        "quests_progress": ["user_id", "quest_type", "quest_id", "season_id"],
+        "friends": ["user_id", "friend_id"],
+        "rooms": ["code"],
+        "user_profiles": ["user_id"],
+        "user_inventory": ["user_id", "item_id"],
+        "active_cosmetics": ["user_id"],
+    }
+
+    @staticmethod
+    def _quote(name):
+        return '"' + str(name).replace('"', '""') + '"'
+
+    @classmethod
+    def tables_without_key(cls, conn):
+        tables = [row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )]
+        return [t for t in tables
+                if not any(col[5] for col in conn.execute(f"PRAGMA table_info({cls._quote(t)})"))]
+
+    def _rebuild(self, conn, table):
+        q = self._quote
+        columns = list(conn.execute(f"PRAGMA table_info({q(table)})"))
+        names = [col[1] for col in columns]
+        definitions = []
+        for _, name, col_type, notnull, default, _ in columns:
+            part = f"{q(name)} {col_type or ''}".strip()
+            if notnull:
+                part += " NOT NULL"
+            if default is not None:
+                part += f" DEFAULT {default}"
+            definitions.append(part)
+        key = self.CANONICAL_KEYS.get(table)
+        if key and all(column in names for column in key):
+            body = ", ".join(definitions + [f"PRIMARY KEY ({', '.join(q(c) for c in key)})"])
+            insert = "INSERT OR REPLACE"
+        else:
+            body = ", ".join(['"id" INTEGER PRIMARY KEY AUTOINCREMENT'] + definitions)
+            insert = "INSERT"
+        indexes = [row[0] for row in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL", (table,)
+        )]
+        temp = f"{table}__with_key"
+        column_list = ", ".join(q(c) for c in names)
+        conn.execute(f"DROP TABLE IF EXISTS {q(temp)}")
+        conn.execute(f"CREATE TABLE {q(temp)} ({body})")
+        conn.execute(f"{insert} INTO {q(temp)} ({column_list}) SELECT {column_list} FROM {q(table)} ORDER BY rowid")
+        conn.execute(f"DROP TABLE {q(table)}")
+        conn.execute(f"ALTER TABLE {q(temp)} RENAME TO {q(table)}")
+        for sql in indexes:
+            conn.execute(sql)
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        # Одна транзакция на все пересборки: сбой посередине не оставит таблицу без данных
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
+        for table in self.tables_without_key(conn):
+            self._rebuild(conn, table)
+
+    def down(self, conn: sqlite3.Connection) -> None:
+        """Keys only make a table stricter — nothing to undo."""
+
+
+class Migration_004_BusinessMessages(Migration):
+    """Short-lived copies of Telegram Business messages.
+
+    Telegram reports a deleted message only by its id, so the bot keeps what it
+    saw for a few days. On disk, so a restart does not forget them; old rows
+    are purged by the bot.
+    """
+
+    version = 4
+    description = "Add business_messages"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS business_messages (
+            key TEXT PRIMARY KEY,
+            data_json TEXT NOT NULL,
+            saved_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_messages_saved_at
+        ON business_messages(saved_at);
+        """)
+
+    def down(self, conn: sqlite3.Connection) -> None:
+        conn.executescript("""
+        DROP INDEX IF EXISTS idx_business_messages_saved_at;
+        DROP TABLE IF EXISTS business_messages;
+        """)
+
+
 # List of all migrations in order
 MIGRATIONS = [
     Migration_001_InitialSchema,
     Migration_002_StructuredRuntimeTables,
+    Migration_003_PrimaryKeys,
+    Migration_004_BusinessMessages,
 ]
 
 

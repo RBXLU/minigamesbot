@@ -25,6 +25,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from bussines_bot import is_business_game_trigger, register_business_handlers
 from core.db import (
+    BusinessMessageStore,
     backup_database,
     checkpoint as checkpoint_database,
     database_is_healthy,
@@ -440,40 +441,37 @@ GAME_DESCRIPTIONS_LANG = {
 WHATS_NEW_RELEASES = {
     "1.2.0": {
         "ru": [
-            "🎃 «Ночь тыкв» с 25 октября по 2 ноября: собирайте тыквы в играх и на охоте в группах, "
-            "тратьте их в хеллоуин-лавке. Всё — в /event.",
-            "👥 Общая цель: соберём вместе 10 000 тыкв — награду получит каждый участник.",
-            "🪦 На время ивента сапёр превращается в «Кладбище», в виселице — жуткие слова, "
-            "в крестиках-ноликах 🎃 против 👻.",
-            "🏆 Топ тыкв: первые 10 получат титул «Король тыкв 2026» — его не купить.",
-            "🎨 Рамки и темы из магазина теперь видно в профиле.",
-            "⚡ Бот стал заметно быстрее и больше не падает под нагрузкой.",
-            "👥 Бот работает в любой группе: добавьте его, сделайте админом и откройте /games.",
-            "📱 Новый Mini App: вкладки, магазин, рекорды недели и честное казино — ставки разыгрывает сервер.",
+            "🎃 «Ночь тыкв» уже идёт, до 2 ноября: тыквы за каждую партию и охота в группах. Общая цель — "
+            "10 000 тыкв на всех, награды за 2 500, 5 000 и 10 000 — вплоть до 5 000 монет, рамки и аватарки. /event",
+            "💼 Telegram Business: бот в ваших личных переписках покажет удалённые и изменённые сообщения, "
+            "сохранит исчезающие фото, заглушит собеседника (.mute), поиграет с ним и разыграет его (.dox). /business",
+            "🎰 Орёл или решка, слоты и блэкджек — на монеты: ставки 10, 50 или 100. Три семёрки — джекпот ×20!",
+            "🏆 За каждую победу в играх в чате — +10 монет, а эффект победы из магазина теперь виден при каждой победе.",
+            "📱 Новый Mini App: тёплый дизайн, темы из магазина и салют при победе.",
+            "💡 Предложите свою игру или улучшение: /idea — лучшие идеи появятся в боте.",
+            "🔘 Цветные кнопки и понятная помощь: /faq.",
         ],
         "en": [
-            "🎃 Pumpkin Night, Oct 25 – Nov 2: collect pumpkins in games and on hunts in group chats, "
-            "spend them in the Halloween shop. Everything is in /event.",
-            "👥 Community goal: let's collect 10,000 pumpkins together — every participant gets a reward.",
-            "🪦 During the event Minesweeper becomes the Graveyard, Hangman gets spooky words "
-            "and tic-tac-toe is 🎃 vs 👻.",
-            "🏆 Pumpkin leaderboard: the top 10 get the King of Pumpkins 2026 title — it can't be bought.",
-            "🎨 Frames and themes from the shop are now visible in your profile.",
-            "⚡ The bot is noticeably faster and no longer crashes under load.",
-            "👥 The bot now works in any group: add it, make it admin and open /games.",
-            "📱 New Mini App: tabs, shop, weekly records and a fair casino — bets are settled by the server.",
+            "🎃 Pumpkin Night is on until Nov 2: pumpkins for every game and hunts in group chats. Community goal — "
+            "10,000 pumpkins, rewards at 2,500, 5,000 and 10,000 — up to 5,000 coins, a frame and an avatar. /event",
+            "💼 Telegram Business: in your private chats the bot shows deleted and edited messages, saves "
+            "disappearing photos, mutes a chat (.mute), plays games and pranks (.dox). /business",
+            "🎰 Coin flip, slots and blackjack now take bets of 10, 50 or 100 coins. Three sevens — ×20 jackpot!",
+            "🏆 Every win in chat games pays 10 coins, and your shop victory effect now shows on every win.",
+            "📱 New Mini App: warm design, shop themes and fireworks when you win.",
+            "💡 Suggest your own game or improvement: /idea — the best ones will make it into the bot.",
+            "🔘 Coloured buttons and clear help: /faq.",
         ],
         "uk": [
-            "🎃 «Ніч гарбузів» з 25 жовтня по 2 листопада: збирайте гарбузи в іграх і на полюванні в групах, "
-            "витрачайте їх у хелловін-крамниці. Усе — в /event.",
-            "👥 Спільна мета: зберемо разом 10 000 гарбузів — нагороду отримає кожен учасник.",
-            "🪦 На час івенту сапер стає «Цвинтарем», у шибениці — моторошні слова, "
-            "у хрестиках-нуликах 🎃 проти 👻.",
-            "🏆 Топ гарбузів: перші 10 отримають титул «Король гарбузів 2026» — його не купити.",
-            "🎨 Рамки й теми з крамниці тепер видно в профілі.",
-            "⚡ Бот став помітно швидшим і більше не падає під навантаженням.",
-            "👥 Бот працює в будь-якій групі: додайте його, зробіть адміном і відкрийте /games.",
-            "📱 Новий Mini App: вкладки, крамниця, рекорди тижня й чесне казино — ставки розігрує сервер.",
+            "🎃 «Ніч гарбузів» уже триває, до 2 листопада: гарбузи за кожну партію й полювання в групах. Спільна мета — "
+            "10 000 гарбузів, нагороди за 2 500, 5 000 і 10 000 — аж до 5 000 монет, рамки й аватарки. /event",
+            "💼 Telegram Business: у ваших особистих листуваннях бот покаже видалені й змінені повідомлення, "
+            "збереже фото, що зникають, заглушить співрозмовника (.mute), пограє й розіграє його (.dox). /business",
+            "🎰 Орел чи решка, слоти й блекджек — на монети: ставки 10, 50 або 100. Три сімки — джекпот ×20!",
+            "🏆 За кожну перемогу в іграх у чаті — +10 монет, а ефект перемоги з крамниці тепер видно щоразу.",
+            "📱 Новий Mini App: теплий дизайн, теми з крамниці й салют на перемогу.",
+            "💡 Запропонуйте свою гру чи покращення: /idea — найкращі з'являться в боті.",
+            "🔘 Кольорові кнопки й зрозуміла допомога: /faq.",
         ],
     },
     "2.0.0": {
@@ -2858,39 +2856,148 @@ def _last_game_instruction(uid):
 
 
 def _render_help_text(uid):
+    bot_name = f"<code>@{INLINE_BOT_USERNAME}</code>"
     return localized_text(
         uid,
-        "📖 Помощь\n\n"
-        "• /start или /menu — главное меню\n"
-        "• /profile — профиль и статистика\n"
-        "• /shop — магазин\n"
-        "• /achievements — достижения\n"
-        "• /find — поиск PvP соперника в ЛС\n"
-        "• /party, /party_join — комнаты\n"
-        "• /poker [ставка] — покер против бота\n"
-        "• /replay — реплей последней игры\n"
-        "• /support — связь с поддержкой\n"
-        "• Напишите боту или используйте inline-режим через "
-        f"<code>@{INLINE_BOT_USERNAME}</code> для запуска игр.",
-        "📖 Help\n\n"
-        "• /start or /menu — main menu\n"
-        "• /profile — profile and stats\n"
-        "• /shop — shop\n"
-        "• /achievements — achievements\n"
-        "• /find — find a PvP opponent in private chat\n"
-        "• /party, /party_join — room games\n"
-        "• /support — contact support\n"
-        f"• Use inline mode with <code>@{INLINE_BOT_USERNAME}</code> to launch games.",
-        "📖 Допомога\n\n"
-        "• /start або /menu — головне меню\n"
-        "• /profile — профіль і статистика\n"
-        "• /shop — магазин\n"
-        "• /achievements — досягнення\n"
-        "• /find — пошук PvP суперника в особистому чаті\n"
-        "• /party, /party_join — кімнати\n"
-        "• /support — зв'язок із підтримкою\n"
-        f"• Використовуйте inline-режим через <code>@{INLINE_BOT_USERNAME}</code> для запуску ігор.",
+        "📖 <b>Как пользоваться ботом</b>\n\n"
+        "<b>Играть одному:</b> нажмите «🎮 Играть» внизу чата — откроется приложение со всеми играми. "
+        "Или /start → «🎮 Игры».\n\n"
+        f"<b>Играть с другом:</b> в чате с другом напишите {bot_name} и пробел, выберите игру из списка — "
+        "друг нажмёт «Присоединиться».\n\n"
+        "<b>В группе:</b> добавьте бота в группу и напишите /games.\n\n"
+        "<b>Полезные команды:</b>\n"
+        "/start — главное меню\n"
+        "/profile — ваш профиль и статистика\n"
+        "/shop — магазин: аватары, рамки, темы\n"
+        "/event — текущий ивент\n"
+        "/business — бот в личных переписках\n"
+        "/idea — предложить игру\n"
+        "/support — написать в поддержку\n\n"
+        "Остались вопросы? Нажмите «❓ Частые вопросы» ниже.",
+        "📖 <b>How to use the bot</b>\n\n"
+        "<b>Play alone:</b> tap «🎮 Play» at the bottom of the chat to open the app with every game. "
+        "Or /start → «🎮 Games».\n\n"
+        f"<b>Play with a friend:</b> in a chat with your friend type {bot_name} and a space, pick a game — "
+        "your friend taps «Join».\n\n"
+        "<b>In a group:</b> add the bot to the group and send /games.\n\n"
+        "<b>Useful commands:</b>\n"
+        "/start — main menu\n/profile — profile and stats\n/shop — shop\n/event — current event\n"
+        "/business — the bot in your private chats\n/idea — suggest a game\n/support — contact support",
+        "📖 <b>Як користуватися ботом</b>\n\n"
+        "<b>Грати самому:</b> натисніть «🎮 Грати» внизу чату — відкриється застосунок з усіма іграми. "
+        "Або /start → «🎮 Ігри».\n\n"
+        f"<b>Грати з другом:</b> у чаті з другом напишіть {bot_name} і пробіл, оберіть гру — "
+        "друг натисне «Приєднатися».\n\n"
+        "<b>У групі:</b> додайте бота в групу й напишіть /games.\n\n"
+        "<b>Корисні команди:</b>\n"
+        "/start — головне меню\n/profile — профіль\n/shop — крамниця\n/event — поточний івент\n"
+        "/business — бот в особистих листуваннях\n/idea — запропонувати гру\n/support — підтримка",
     )
+
+
+# ---------------------------------------------------------------------------
+# Частые вопросы: темами с кнопками, а не стеной текста. Новички спрашивают
+# одно и то же — как начать, как позвать друга, откуда монеты.
+# ---------------------------------------------------------------------------
+FAQ_TOPICS = (
+    ("start", "🎮 Как начать играть?"),
+    ("friend", "👥 Как сыграть с другом?"),
+    ("app", "📱 Что такое Mini App?"),
+    ("coins", "🪙 Монеты: где взять и куда тратить"),
+    ("events", "🎃 Ивенты, квесты и сезон"),
+    ("business", "💼 Бот в личных переписках"),
+    ("trouble", "🆘 Что-то не работает"),
+)
+
+
+def _faq_answer(key):
+    bot_name = f"<code>@{INLINE_BOT_USERNAME}</code>"
+    answers = {
+        "start": (
+            "🎮 <b>Как начать играть</b>\n\n"
+            "Есть три способа — выбирайте любой:\n\n"
+            "1️⃣ <b>Приложение.</b> В чате с ботом нажмите кнопку «🎮 Играть» слева от поля ввода. "
+            "Откроется Mini App со всеми играми.\n\n"
+            "2️⃣ <b>Меню бота.</b> Нажмите /start, затем «🎮 Игры» и выберите игру.\n\n"
+            f"3️⃣ <b>Любой чат.</b> Начните писать {bot_name} и поставьте пробел — появится список игр. "
+            "Нажмите на игру, и она отправится в чат.\n\n"
+            "💡 Не знаете, с чего начать? Попробуйте 2048 или «Камень, ножницы, бумага»."
+        ),
+        "friend": (
+            "👥 <b>Как сыграть с другом</b>\n\n"
+            "1. Откройте чат с другом.\n"
+            f"2. В поле ввода напишите {bot_name} и поставьте пробел — подождите секунду, появится список игр.\n"
+            "3. Выберите игру, например «Крестики-нолики», — в чат придёт сообщение с игрой.\n"
+            "4. Друг нажимает «Присоединиться» — и вы ходите по очереди прямо в чате.\n\n"
+            "<b>В группе</b> ещё проще: добавьте бота в группу и напишите /games."
+        ),
+        "app": (
+            "📱 <b>Mini App</b> — приложение прямо внутри Telegram: все игры, профиль, магазин и сезон в одном окне.\n\n"
+            "<b>Как открыть:</b> в чате с ботом нажмите кнопку «🎮 Играть» слева от поля ввода или напишите /app.\n\n"
+            "Монеты, рекорды и покупки в приложении и в боте общие."
+        ),
+        "coins": (
+            "🪙 <b>Монеты</b>\n\n"
+            "<b>Как получить:</b>\n"
+            "• +2 за каждую сыгранную партию\n"
+            "• +10 за каждую победу в играх в чате\n"
+            "• квесты и достижения — кнопка «Квесты» в /start\n"
+            "• пригласите друга — /ref, до 100 монет за каждого\n"
+            "• ставки в орле и решке, слотах и блэкджеке — можно удвоить, а можно и проиграть 😉\n\n"
+            "<b>Куда тратить:</b> /shop — аватары, рамки, темы и эффекты победы."
+        ),
+        "events": (
+            "🎃 <b>Ивенты</b> — праздники на несколько дней с особыми наградами. Пока идёт ивент, в главном меню "
+            "есть его кнопка, а всё о нём — в /event.\n\n"
+            "⭐ <b>Сезонный пропуск</b> — уровни за игру и награда на каждом уровне: /pass\n\n"
+            "📋 <b>Квесты</b> — задания на день и неделю за монеты: кнопка «Квесты» в /start."
+        ),
+        "business": (
+            "💼 <b>Бот в ваших личных переписках</b> (Telegram Business)\n\n"
+            "<b>Что умеет:</b> показывает удалённые и изменённые сообщения собеседника, сохраняет исчезающие фото, "
+            "глушит собеседника (.mute), играет с ним прямо в переписке и разыгрывает его (.dox).\n\n"
+            "<b>Как подключить:</b> Настройки → Telegram для бизнеса → Чат-боты → впишите "
+            f"{bot_name}. Нужен Telegram Premium.\n\n"
+            "Все команды и настройки — /business."
+        ),
+        "trouble": (
+            "🆘 <b>Что-то не работает?</b>\n\n"
+            "• <b>Кнопка не реагирует</b> — подождите пару секунд и нажмите ещё раз. Если игре больше суток, "
+            "начните новую.\n"
+            "• <b>Бот молчит в группе</b> — сделайте его администратором группы.\n"
+            f"• <b>Не появляется список игр</b> — после {bot_name} обязательно нужен пробел.\n"
+            "• <b>Не открывается приложение</b> — обновите Telegram до последней версии.\n\n"
+            "Не помогло? Напишите нам: /support. Расскажите, что нажимали, — так починим быстрее."
+        ),
+    }
+    return answers[key]
+
+
+def _faq_menu_kb():
+    kb = types.InlineKeyboardMarkup()
+    for key, title in FAQ_TOPICS:
+        kb.add(types.InlineKeyboardButton(title, callback_data=f"faq_{key}"))
+    return kb
+
+
+FAQ_MENU_TEXT = "❓ <b>Частые вопросы</b>\n\nВыберите, что хотите узнать:"
+
+
+@bot.message_handler(commands=["faq"])
+def faq_command(message):
+    bot.send_message(message.chat.id, FAQ_MENU_TEXT, parse_mode="HTML", reply_markup=_faq_menu_kb())
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("faq_"))
+def faq_callback(call):
+    key = call.data[len("faq_"):]
+    bot.answer_callback_query(call.id)
+    if key == "menu" or key not in dict(FAQ_TOPICS):
+        safe_edit_message(call, FAQ_MENU_TEXT, reply_markup=_faq_menu_kb(), parse_mode="HTML")
+        return
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("◀️ Все вопросы", callback_data="faq_menu"))
+    safe_edit_message(call, _faq_answer(key), reply_markup=kb, parse_mode="HTML")
 
 
 def _render_whats_new_text(uid):
@@ -2910,11 +3017,12 @@ def _render_whats_new_text(uid):
 def _render_onboarding_text(uid):
     return localized_text(
         uid,
-        "👋 Добро пожаловать!\n\n"
-        "1. Откройте раздел игр.\n"
-        "2. Выберите режим: соло, PvP или комната.\n"
-        "3. Загляните в профиль и квесты, чтобы следить за прогрессом.\n"
-        "4. Если что-то непонятно, используйте /help.",
+        "👋 Привет! Здесь больше 20 игр прямо в Telegram — и все бесплатные.\n\n"
+        "Как начать:\n"
+        "🎮 Нажмите «Играть» внизу чата — откроется приложение со всеми играми.\n"
+        f"👥 Хотите с другом? В чате с ним напишите @{INLINE_BOT_USERNAME} и пробел, выберите игру.\n"
+        "🪙 За каждую партию дают монеты — на них в /shop покупают аватары и рамки.\n\n"
+        "Что-то непонятно — /faq, там ответы на частые вопросы.",
         "👋 Welcome!\n\n"
         "1. Open the games section.\n"
         "2. Pick solo, PvP, or a room mode.\n"
@@ -3165,6 +3273,7 @@ def _room_close(code, reason=""):
 def _games_watchdog(interval=60):
     """Раз в минуту выгружает партии, которые создались и остались без игрока,
     и следит, доиграны ли партии во время тех. работ."""
+    ticks = 0
     while not _shutdown_event.wait(interval):
         try:
             dropped = sum(store.sweep() for store in _GAME_STORES)
@@ -3176,6 +3285,12 @@ def _games_watchdog(interval=60):
             _maintenance_watch()
         except Exception as e:
             log_exception("maintenance_watch", e)
+        ticks += 1
+        if ticks % 10 == 0 and any(_biz_counts.values()):
+            LOGGER.info("Business за 10 мин: сообщений %(message)s, правок %(edited)s, "
+                        "удалений %(deleted)s, подключений %(connection)s", dict(_biz_counts))
+            for key in _biz_counts:
+                _biz_counts[key] = 0
 
 
 def _rooms_watchdog():
@@ -6158,7 +6273,9 @@ def shop_callbacks(call):
 # ---------------------------------------------------------------------------
 _biz = {}
 _biz_lock = threading.Lock()
-biz_cache = biz_core.MessageCache()
+biz_cache = biz_core.MessageCache(store=BusinessMessageStore(DB_FILE))
+# Сколько бизнес-событий пришло — раз в 10 минут уходит в лог (только числа, без текста)
+_biz_counts = {"message": 0, "edited": 0, "deleted": 0, "connection": 0}
 biz_games = BoundedGames()
 # Сообщения, которые удалил сам бот (мьют), — об их удалении не докладываем
 _biz_self_deleted = OrderedDict()
@@ -6260,8 +6377,13 @@ def _biz_chat_kb(chat_id):
 # --------------------------------- подключение ---------------------------------
 
 BIZ_FEATURES = (
-    "🗑 собеседник удалил сообщение — покажу, что там было\n"
+    "🗑 собеседник удалил сообщение — покажу, что там было (помню сообщения 3 дня)\n"
     "✏️ собеседник изменил сообщение — покажу, как было и как стало\n"
+    "📸 исчезающее фото или видео — ответьте на него любым сообщением, и я пришлю копию сюда "
+    "(или напишите в ответ <code>.save</code>)\n"
+    "🕵️ <code>.dox</code> — шуточный «сбор информации» о собеседнике, в конце — что это прикол; "
+    "свой финальный текст — в /business\n"
+    "⌨️ <code>.type текст</code> — сообщение печатается буква за буквой\n"
     "🎮 игры прямо в переписке: напишите в чате <code>.игры</code> "
     "(или сразу <code>.rps</code>, <code>.ttt</code>, <code>.dice</code>)\n"
     "🔇 <code>.mute 10m</code> — сообщения собеседника будут сразу удаляться "
@@ -6299,6 +6421,9 @@ BIZ_TELEMETRY_TEXT = (
 
 @bot.business_connection_handler(func=lambda c: True)
 def business_connection_update(connection):
+    _biz_counts["connection"] += 1
+    LOGGER.info("Business: подключение %s владельца %s, включено=%s",
+                connection.id[:8], connection.user.id, connection.is_enabled)
     try:
         before = _biz["connections"].get(connection.id) or {}
         conn = _biz_save_connection(connection)
@@ -6395,6 +6520,7 @@ def _biz_muted(connection_id, chat_id):
     "location", "contact", "dice", "poll",
 ])
 def business_message(message):
+    _biz_counts["message"] += 1
     try:
         connection_id = message.business_connection_id
         conn = _biz_connection(connection_id)
@@ -6418,6 +6544,22 @@ def business_message(message):
             if lowered in (".unmute", ".размут", ".анмут"):
                 _biz_quiet_delete(connection_id, message)
                 _biz_handle_unmute(message, conn)
+                return
+            if message.reply_to_message is not None and _biz_save_reply(message, conn, lowered):
+                return
+            command = lowered.split(maxsplit=1)[0] if lowered else ""
+            if command in (".dox", ".докс"):
+                _biz_quiet_delete(connection_id, message)
+                custom = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else None
+                _biz_run_dox(connection_id, message.chat, conn, custom)
+                return
+            if command in (".type", ".печать"):
+                body = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""
+                if body:
+                    _biz_quiet_delete(connection_id, message)
+                    _biz_run_typewriter(connection_id, message.chat.id, body)
+                else:
+                    _biz_notify(conn, "⌨️ Напишите текст после команды: .type Привет, как дела?")
                 return
         elif _biz_muted(connection_id, message.chat.id):
             try:
@@ -6454,10 +6596,111 @@ def _biz_quiet_delete(connection_id, message):
         pass
 
 
+# ------------------------- вложения, исчезающие фото -------------------------
+
+BIZ_MEDIA_SENDERS = {
+    "photo": "send_photo", "video": "send_video", "animation": "send_animation", "voice": "send_voice",
+    "audio": "send_audio", "document": "send_document", "video_note": "send_video_note", "sticker": "send_sticker",
+}
+# Что Telegram умеет делать исчезающим: их сохраняем по одному ответу владельца
+BIZ_DISAPPEARING_KINDS = ("photo", "video", "voice", "video_note")
+BIZ_SAVE_COMMANDS = (".save", ".сохранить", ".сохр")
+
+
+def _biz_send_media(chat_id, record, caption):
+    """Пересылает вложение по file_id; у кружков и стикеров подписи нет — она идёт отдельно."""
+    sender = getattr(bot, BIZ_MEDIA_SENDERS[record["kind"]])
+    if record["kind"] in ("video_note", "sticker"):
+        bot.send_message(chat_id, caption)
+        return sender(chat_id, record["file_id"])
+    return sender(chat_id, record["file_id"], caption=caption[:1024])
+
+
+def _biz_save_reply(message, conn, lowered):
+    """Ответ владельца на вложение: исчезающее фото, видео, голосовое или кружок
+    бот сохраняет сам, любое другое — по команде .save. True — ответ был командой."""
+    replied = message.reply_to_message
+    record = biz_core.snapshot(replied)
+    explicit = lowered in BIZ_SAVE_COMMANDS
+    if explicit:
+        _biz_quiet_delete(message.business_connection_id, message)
+    if not record.get("file_id") or record["kind"] not in BIZ_MEDIA_SENDERS:
+        if explicit:
+            _biz_notify(conn, "📸 .save сохраняет вложения: ответьте этой командой на фото, видео, голосовое или кружок.")
+        return explicit
+    from_friend = bool(replied.from_user) and replied.from_user.id != conn["owner"]
+    seen = biz_cache.get(message.business_connection_id, message.chat.id, replied.message_id)
+    # Обычные сообщения собеседника бот уже видел; не видел — значит, оно исчезающее
+    if not explicit and (not from_friend or seen or record["kind"] not in BIZ_DISAPPEARING_KINDS):
+        return False
+    label = biz_core.MEDIA_LABELS.get(record["kind"], "вложение")
+    try:
+        _biz_send_media(conn["chat"], record, f"📸 Сохранил {label} · {record['name']}")
+        LOGGER.info("Business: сохранено вложение (%s) для владельца %s", record["kind"], conn["owner"])
+    except Exception as e:
+        log_exception("business_save_media", e)
+        _biz_notify(conn, "📸 Не получилось сохранить вложение — Telegram не отдал файл. Попробуйте ответить ещё раз.")
+    return explicit
+
+
+# -------------------------------- .dox и .type --------------------------------
+
+BIZ_DOX_DEFAULT = "😜 Шутка! Никакой информации никто не собирал — это просто прикол. Хорошего дня! 🙂"
+BIZ_DOX_STEPS = (
+    ("🔌 Подключаюсь к базам данных…", 5),
+    ("🌐 Определяю IP-адрес…", 25),
+    ("📍 Ищу геолокацию…", 45),
+    ("📱 Пробиваю номер телефона…", 65),
+    ("🗂 Собираю досье…", 85),
+    ("📦 Упаковываю результаты…", 100),
+)
+BIZ_ANIMATION_STEP = 1.3
+BIZ_TYPE_STEP = 0.7
+
+
+def _biz_progress(percent):
+    filled = round(percent / 10)
+    return "▓" * filled + "░" * (10 - filled) + f" {percent}%"
+
+
+def _biz_animate(connection_id, chat_id, frames, delay):
+    """Отправляет первый кадр и правит сообщение остальными — в отдельном потоке,
+    чтобы обработчики бота не ждали анимацию."""
+    def run():
+        try:
+            sent = bot.send_message(chat_id, frames[0], business_connection_id=connection_id)
+            for frame in frames[1:]:
+                time.sleep(delay)
+                bot.edit_message_text(frame, chat_id=chat_id, message_id=sent.message_id,
+                                      business_connection_id=connection_id)
+        except Exception as e:
+            log_exception("business_animation", e)
+    threading.Thread(target=run, daemon=True, name="business-animation").start()
+
+
+def _biz_run_dox(connection_id, chat, conn, custom=None):
+    name = chat.first_name or "собеседник"
+    final = (custom or _biz_settings(conn["owner"]).get("dox_text") or BIZ_DOX_DEFAULT).strip()
+    head = f"🕵️ Сбор информации: {name}"
+    frames = [f"{head}\n\n{step}\n{_biz_progress(percent)}" for step, percent in BIZ_DOX_STEPS]
+    frames.append(f"{head}\n\n{final}")
+    _biz_animate(connection_id, chat.id, frames, BIZ_ANIMATION_STEP)
+
+
+def _biz_run_typewriter(connection_id, chat_id, body):
+    """Текст «печатается»: не больше 10 правок — чаще Telegram начнёт отказывать."""
+    body = body[:300]
+    steps = max(1, min(10, len(body)))
+    size = -(-len(body) // steps)
+    frames = [body[:size * i] + "▌" for i in range(1, steps)] + [body]
+    _biz_animate(connection_id, chat_id, frames, BIZ_TYPE_STEP)
+
+
 @bot.edited_business_message_handler(func=lambda m: True, content_types=[
     "text", "photo", "video", "animation", "audio", "document",
 ])
 def business_message_edited(message):
+    _biz_counts["edited"] += 1
     try:
         connection_id = message.business_connection_id
         conn = _biz_connection(connection_id)
@@ -6465,6 +6708,8 @@ def business_message_edited(message):
             return
         if message.from_user.id == conn["owner"]:
             return
+        if getattr(message, "via_bot", None):
+            return            # ход в инлайн-игре перерисовывает сообщение — это не правка человека
         new = biz_core.snapshot(message)
         old = biz_cache.get(connection_id, message.chat.id, message.message_id)
         biz_cache.put(connection_id, message.chat.id, message.message_id, new)
@@ -6479,14 +6724,9 @@ def business_message_edited(message):
         log_exception("business_message_edited", e)
 
 
-BIZ_MEDIA_SENDERS = {
-    "photo": "send_photo", "video": "send_video", "animation": "send_animation", "voice": "send_voice",
-    "audio": "send_audio", "document": "send_document",
-}
-
-
 @bot.deleted_business_messages_handler(func=lambda d: True)
 def business_messages_deleted(deleted):
+    _biz_counts["deleted"] += 1
     try:
         connection_id = deleted.business_connection_id
         conn = _biz_connection(connection_id)
@@ -6504,11 +6744,8 @@ def business_messages_deleted(deleted):
             shown += 1
             _biz_notify(conn, f"🗑 {record['name']} · сообщение удалено\n\n{biz_core.describe(record)}",
                         _biz_chat_kb(chat_id))
-            sender = BIZ_MEDIA_SENDERS.get(record.get("kind"))
-            if record.get("file_id") and record.get("kind") in ("sticker", "video_note"):
-                getattr(bot, "send_" + record["kind"])(conn["chat"], record["file_id"])
-            elif record.get("file_id") and sender:
-                getattr(bot, sender)(conn["chat"], record["file_id"], caption="🗑 Удалённое вложение")
+            if record.get("file_id") and record.get("kind") in BIZ_MEDIA_SENDERS:
+                _biz_send_media(conn["chat"], record, "🗑 Удалённое вложение")
     except Exception as e:
         log_exception("business_messages_deleted", e)
 
@@ -6792,6 +7029,7 @@ def _business_status(uid):
                                       callback_data="bzs_deleted"),
            types.InlineKeyboardButton(f"✏️ {'Выключить' if settings['edited'] else 'Включить'} изменённые",
                                       callback_data="bzs_edited"))
+    kb.add(types.InlineKeyboardButton("🕵️ Свой текст для .dox", callback_data="bzs_dox"))
     if user.get("consent"):
         kb.add(types.InlineKeyboardButton("📊 Отозвать согласие на телеметрию", callback_data="bzc_no"))
     else:
@@ -6806,6 +7044,35 @@ def business_cmd(message):
         return
     text, kb = _business_status(message.from_user.id)
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+
+biz_wait = {}
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "bzs_dox")
+def business_dox_text_callback(call):
+    uid = call.from_user.id
+    biz_wait[uid] = "dox_text"
+    bot.answer_callback_query(call.id)
+    current = _biz_settings(uid).get("dox_text") or BIZ_DOX_DEFAULT
+    bot.send_message(
+        uid,
+        "🕵️ Пришлите текст, которым закончится .dox — например, «Попался! Это был розыгрыш 😄».\n\n"
+        f"Сейчас: {current}\n\nОтправьте «-», чтобы вернуть стандартный. "
+        "Для одного раза можно написать и прямо в переписке: .dox ваш текст",
+    )
+
+
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.from_user.id in biz_wait
+                     and bool(m.text) and not m.text.startswith("/"))
+def business_wait_input(message):
+    uid = message.from_user.id
+    if biz_wait.pop(uid, None) != "dox_text":
+        return
+    text = message.text.strip()
+    value = "" if text == "-" else text[:500]
+    _biz_store(lambda state: state["settings"].setdefault(str(uid), {}).__setitem__("dox_text", value))
+    bot.send_message(uid, "✅ Готово! Так закончится .dox:\n\n" + (value or BIZ_DOX_DEFAULT))
 
 
 @bot.callback_query_handler(func=lambda c: c.data in ("bzs_deleted", "bzs_edited"))
@@ -7083,6 +7350,13 @@ def _maintenance_intercept(update):
         bot._exec_task(_maintenance_reply_message, message)
     return True
 
+
+# Какие события просить у Telegram. Без явного списка Telegram присылает тот,
+# что бот запросил когда-то раньше, — и бизнес-события туда могли не попасть:
+# тогда уведомления об удалённых сообщениях молчат без единой ошибки в логе.
+# Участники групп и реакции боту не нужны — они только шумят.
+ALLOWED_UPDATES = [kind for kind in telebot.util.update_types
+                   if kind not in ("chat_member", "message_reaction", "message_reaction_count")]
 
 _original_process_new_updates = bot.process_new_updates
 
@@ -14503,7 +14777,9 @@ def send_welcome(message):
 @bot.message_handler(commands=["help"])
 def help_command(message):
     uid = message.from_user.id
-    bot.send_message(message.chat.id, _render_help_text(uid), parse_mode="HTML")
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❓ Частые вопросы", callback_data="faq_menu"))
+    bot.send_message(message.chat.id, _render_help_text(uid), parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(commands=["news", "whatsnew"])
@@ -14855,7 +15131,9 @@ def menu_action_callbacks(call):
     action = call.data
     if action == "menu_help":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, _render_help_text(uid), parse_mode="HTML")
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("❓ Частые вопросы", callback_data="faq_menu"))
+        bot.send_message(call.message.chat.id, _render_help_text(uid), parse_mode="HTML", reply_markup=kb)
         return
     if action == "menu_whats_new":
         bot.answer_callback_query(call.id)
@@ -14877,21 +15155,7 @@ def menu_action_callbacks(call):
         return
     if action == "show_faq":
         bot.answer_callback_query(call.id)
-        bot.send_message(
-            call.message.chat.id,
-            localized_text(
-                uid,
-                "FAQ\n\n• Где запускать игры? Через меню или inline-режим.\n"
-                "• Как вернуть прогресс? Используйте главное меню и профиль.\n"
-                "• Куда писать о проблеме? В поддержку через /support.",
-                "FAQ\n\n• Where do I launch games? Use the menu or inline mode.\n"
-                "• How do I track progress? Open the main menu and profile.\n"
-                "• Where do I report problems? Use /support.",
-                "FAQ\n\n• Де запускати ігри? Через меню або inline-режим.\n"
-                "• Як повернутись до прогресу? Відкрийте головне меню і профіль.\n"
-                "• Куди писати про проблему? Через /support.",
-            )
-        )
+        bot.send_message(call.message.chat.id, FAQ_MENU_TEXT, parse_mode="HTML", reply_markup=_faq_menu_kb())
         return
     if action == "toggle_notifications":
         d = load_data()
@@ -15164,7 +15428,7 @@ if __name__ == "__main__":
         LOGGER.info("Бот запущен, Mini App выключен")
     while not _shutdown_event.is_set():
         try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30)
+            bot.infinity_polling(timeout=30, long_polling_timeout=30, allowed_updates=ALLOWED_UPDATES)
         except Exception as e:
             if _shutdown_event.is_set():
                 break

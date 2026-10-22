@@ -691,6 +691,52 @@ def save_user_record(user_id, user_data, db_path=DEFAULT_DB_PATH):
     save_user(user_id, user_data, db_path=db_path)
 
 
+class BusinessMessageStore:
+    """Хранилище копий бизнес-сообщений для MessageCache: put / get / delete / purge."""
+
+    def __init__(self, db_path=DEFAULT_DB_PATH):
+        self.db_path = db_path
+
+    def _run(self, what, query, params=(), fetch=False):
+        def op():
+            with _DB_LOCK:
+                conn = _connect(self.db_path)
+                try:
+                    _ensure_schema(conn, self.db_path)
+                    cursor = conn.execute(query, params)
+                    result = cursor.fetchone() if fetch else cursor.rowcount
+                    conn.commit()
+                    return result
+                finally:
+                    conn.close()
+        return _with_retries(op, what)
+
+    def put(self, key, record):
+        self._run(
+            "business_message_put",
+            "INSERT OR REPLACE INTO business_messages(key, data_json, saved_at) VALUES (?, ?, ?)",
+            (key, json.dumps(record, ensure_ascii=False), float(record.get("at") or 0)),
+        )
+
+    def get(self, key):
+        row = self._run("business_message_get", "SELECT data_json FROM business_messages WHERE key = ?",
+                        (key,), fetch=True)
+        if row is None:
+            return None
+        try:
+            return json.loads(row["data_json"])
+        except Exception:
+            return None
+
+    def delete(self, key):
+        self._run("business_message_delete", "DELETE FROM business_messages WHERE key = ?", (key,))
+
+    def purge(self, before):
+        """Удаляет копии старше отметки времени; возвращает, сколько удалено."""
+        return self._run("business_message_purge", "DELETE FROM business_messages WHERE saved_at < ?",
+                         (float(before),))
+
+
 def log_admin_action(admin_id, action, target_user_id=None, details=None, db_path=DEFAULT_DB_PATH):
     now = _utcnow()
     with _DB_LOCK:
