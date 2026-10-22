@@ -6085,6 +6085,7 @@ def _send_home_menu(message):
 @bot.message_handler(commands=["start"])
 def start(message):
     uid = message.from_user.id
+    _biz_blocked.pop(uid, None)        # нажал /start — значит, разблокировал
     if not _guard_user(uid, chat_id=message.chat.id, action="start", require_subscription=False):
         return
     # Проверяем до _send_home_menu: он создаёт запись пользователя.
@@ -6361,11 +6362,27 @@ def _biz_settings(uid):
     return settings
 
 
+# Владелец мог подключить бота и заблокировать его: Telegram всё равно шлёт
+# бизнес-апдейты, но писать ему нельзя. Пока не прошёл срок — даже не пытаемся.
+BIZ_BLOCKED_RETRY = 6 * 3600
+_biz_blocked = {}
+
+
 def _biz_notify(conn, text, reply_markup=None):
+    owner = conn.get("owner")
+    if time.time() - _biz_blocked.get(owner, 0) < BIZ_BLOCKED_RETRY:
+        return None
     try:
-        return bot.send_message(conn["chat"], text, reply_markup=reply_markup)
+        message = bot.send_message(conn["chat"], text, reply_markup=reply_markup)
+        _biz_blocked.pop(owner, None)
+        return message
     except Exception as e:
-        LOGGER.info("Не удалось написать владельцу бизнес-подключения %s: %s", conn.get("owner"), e)
+        if getattr(e, "error_code", None) == 403:
+            _biz_blocked[owner] = time.time()
+            LOGGER.info("Владелец бизнес-подключения %s заблокировал бота — молчу %d ч",
+                        owner, BIZ_BLOCKED_RETRY // 3600)
+        else:
+            LOGGER.info("Не удалось написать владельцу бизнес-подключения %s: %s", owner, e)
 
 
 def _biz_chat_kb(chat_id):
@@ -6428,6 +6445,7 @@ def business_connection_update(connection):
         before = _biz["connections"].get(connection.id) or {}
         conn = _biz_save_connection(connection)
         uid = conn["owner"]
+        _biz_blocked.pop(uid, None)
         was_on, now_on = bool(before.get("enabled")), conn["enabled"]
 
         def telemetry(state):
