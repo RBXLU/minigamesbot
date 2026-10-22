@@ -10,3 +10,5 @@ backups/
 enviroment/
 .claude/settings.local.json
 bot_data.json
+*.sqlite3-shm
+*.sqlite3-wal
