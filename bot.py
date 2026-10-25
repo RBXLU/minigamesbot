@@ -14351,6 +14351,7 @@ def _webapp_datasets():
 def _webapp_profile(user_id, tg_user=None):
     if tg_user and tg_user.get("first_name"):
         _remember_display_name(user_id, tg_user)
+    _grant_event_titles(user_id)
     rec, unlocked = _load_profile(user_id)
     completed_quests, total_quests = _quest_completion_summary(user_id)
     hw_bucket = _hw_bucket(rec)
@@ -14892,6 +14893,7 @@ def show_main_menu(chat_id, uid):
 # Карточка-хаб главного меню: профиль, прогресс, текущее событие и кнопки
 # ко всему новому. Клавиатура внизу остаётся — к ней привыкли.
 def _hub_text(uid):
+    _grant_event_titles(uid)
     user, unlocked = _load_profile(uid)
     name = html.escape(str(user.get("display_name") or f"user_{uid}"))
     frame = {
