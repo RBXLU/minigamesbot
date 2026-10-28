@@ -4,6 +4,7 @@ import re
 import requests
 from telebot.apihelper import ApiTelegramException
 import random
+import functools
 import time
 import logging
 import traceback
@@ -2870,7 +2871,7 @@ def _render_help_text(uid):
         "/profile — ваш профиль и статистика\n"
         "/shop — магазин: аватары, рамки, темы\n"
         "/event — текущий ивент\n"
-        "/business — бот в личных переписках\n"
+        "/auto — автоматизация чатов\n"
         "/idea — предложить игру\n"
         "/support — написать в поддержку\n\n"
         "Остались вопросы? Нажмите «❓ Частые вопросы» ниже.",
@@ -2882,7 +2883,7 @@ def _render_help_text(uid):
         "<b>In a group:</b> add the bot to the group and send /games.\n\n"
         "<b>Useful commands:</b>\n"
         "/start — main menu\n/profile — profile and stats\n/shop — shop\n/event — current event\n"
-        "/business — the bot in your private chats\n/idea — suggest a game\n/support — contact support",
+        "/auto — chat automation\n/idea — suggest a game\n/support — contact support",
         "📖 <b>Як користуватися ботом</b>\n\n"
         "<b>Грати самому:</b> натисніть «🎮 Грати» внизу чату — відкриється застосунок з усіма іграми. "
         "Або /start → «🎮 Ігри».\n\n"
@@ -2891,7 +2892,7 @@ def _render_help_text(uid):
         "<b>У групі:</b> додайте бота в групу й напишіть /games.\n\n"
         "<b>Корисні команди:</b>\n"
         "/start — головне меню\n/profile — профіль\n/shop — крамниця\n/event — поточний івент\n"
-        "/business — бот в особистих листуваннях\n/idea — запропонувати гру\n/support — підтримка",
+        "/auto — автоматизація чатів\n/idea — запропонувати гру\n/support — підтримка",
     )
 
 
@@ -2905,7 +2906,7 @@ FAQ_TOPICS = (
     ("app", "📱 Что такое Mini App?"),
     ("coins", "🪙 Монеты: где взять и куда тратить"),
     ("events", "🎃 Ивенты, квесты и сезон"),
-    ("business", "💼 Бот в личных переписках"),
+    ("business", "🤖 Автоматизация чатов"),
     ("trouble", "🆘 Что-то не работает"),
 )
 
@@ -2953,12 +2954,13 @@ def _faq_answer(key):
             "📋 <b>Квесты</b> — задания на день и неделю за монеты: кнопка «Квесты» в /start."
         ),
         "business": (
-            "💼 <b>Бот в ваших личных переписках</b> (Telegram Business)\n\n"
+            "🤖 <b>Автоматизация чатов</b> — бот в ваших личных переписках\n\n"
             "<b>Что умеет:</b> показывает удалённые и изменённые сообщения собеседника, сохраняет исчезающие фото, "
-            "глушит собеседника (.mute), играет с ним прямо в переписке и разыгрывает его (.dox).\n\n"
+            "анимирует ваши сообщения (~текст), глушит собеседника (.mute), играет с ним прямо в переписке "
+            "и разыгрывает его (.dox).\n\n"
             "<b>Как подключить:</b> Настройки → Telegram для бизнеса → Чат-боты → впишите "
             f"{bot_name}. Нужен Telegram Premium.\n\n"
-            "Все команды и настройки — /business."
+            "Все команды и настройки — /auto."
         ),
         "trouble": (
             "🆘 <b>Что-то не работает?</b>\n\n"
@@ -6280,6 +6282,10 @@ _biz_counts = {"message": 0, "edited": 0, "deleted": 0, "connection": 0}
 biz_games = BoundedGames()
 # Сообщения, которые удалил сам бот (мьют), — об их удалении не докладываем
 _biz_self_deleted = OrderedDict()
+# Что бот убрал из переписки сам (команды, оригиналы анимаций), по автору и тексту:
+# у собеседника может быть подключён этот же бот, и номера сообщений там другие.
+_biz_bot_removed = OrderedDict()
+BIZ_BOT_REMOVED_TTL = 120
 _biz_rights_warned = set()
 BIZ_DICE_DELAY = 3.6           # сколько крутится анимация кубика в Telegram
 BIZ_GAME_COMMANDS = {
@@ -6339,7 +6345,7 @@ def _biz_rights(connection):
         # Старые подключения сообщают только can_reply
         return {"can_reply": bool(getattr(connection, "can_reply", False))}
     return {name: bool(getattr(rights, name, False))
-            for name in ("can_reply", "can_read_messages", "can_delete_all_messages")}
+            for name in ("can_reply", "can_read_messages", "can_delete_sent_messages", "can_delete_all_messages")}
 
 
 def _biz_save_connection(connection):
@@ -6357,7 +6363,7 @@ def _biz_owner_connected(uid):
 
 
 def _biz_settings(uid):
-    settings = {"deleted": True, "edited": True}
+    settings = {"deleted": True, "edited": True, "animations": True}
     settings.update(_biz["settings"].get(str(uid)) or {})
     return settings
 
@@ -6385,6 +6391,37 @@ def _biz_notify(conn, text, reply_markup=None):
             LOGGER.info("Не удалось написать владельцу бизнес-подключения %s: %s", owner, e)
 
 
+# Автоматизация — для подписчиков канала, как и весь бот. Отказ кэшируем
+# ненадолго: иначе каждое сообщение собеседника стоило бы запроса к Telegram.
+BIZ_SUBSCRIPTION_RECHECK = 120
+BIZ_SUBSCRIPTION_REMIND = 6 * 3600
+_biz_subscription = {}
+_biz_subscription_reminded = {}
+
+
+def _biz_owner_subscribed(uid):
+    if not REQUIRED_CHANNEL or _is_bot_admin(uid):
+        return True
+    at, ok = _biz_subscription.get(uid, (0, False))
+    if time.time() - at < (SUBSCRIPTION_CACHE_TTL if ok else BIZ_SUBSCRIPTION_RECHECK):
+        return ok
+    ok = is_user_subscribed(uid)
+    _biz_subscription[uid] = (time.time(), ok)
+    return ok
+
+
+def _biz_require_subscription(conn):
+    """True — владелец подписан; иначе (не чаще раза в 6 ч) напоминает о подписке."""
+    uid = conn["owner"]
+    if _biz_owner_subscribed(uid):
+        return True
+    if time.time() - _biz_subscription_reminded.get(uid, 0) > BIZ_SUBSCRIPTION_REMIND:
+        _biz_subscription_reminded[uid] = time.time()
+        _biz_notify(conn, "🤖 Автоматизация чатов работает для подписчиков канала. Подпишитесь — "
+                          "и удаления, правки, анимации и игры сразу заработают.", _subscription_keyboard())
+    return False
+
+
 def _biz_chat_kb(chat_id):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("💬 Открыть переписку", url=f"tg://user?id={chat_id}"))
@@ -6399,18 +6436,20 @@ BIZ_FEATURES = (
     "📸 исчезающее фото или видео — ответьте на него любым сообщением, и я пришлю копию сюда "
     "(или напишите в ответ <code>.save</code>)\n"
     "🕵️ <code>.dox</code> — шуточный «сбор информации» о собеседнике, в конце — что это прикол; "
-    "свой финальный текст — в /business\n"
-    "⌨️ <code>.type текст</code> — сообщение печатается буква за буквой\n"
+    "свой финальный текст — в /auto\n"
+    "✨ анимация сообщения — поставьте в начале символ: <code>~текст</code> — по словам, "
+    "<code>^текст</code> — по буквам, <code>%текст</code> — «расшифровка»\n"
     "🎮 игры прямо в переписке: напишите в чате <code>.игры</code> "
     "(или сразу <code>.rps</code>, <code>.ttt</code>, <code>.dice</code>)\n"
     "🔇 <code>.mute 10m</code> — сообщения собеседника будут сразу удаляться "
     "(s — секунды, m — минуты, h — часы, d — дни; без срока — пока не снимете), "
     "<code>.unmute</code> — снять\n"
-    "⚙️ настройки — /business"
+    "⚙️ настройки — /auto"
 )
 BIZ_RIGHT_NAMES = {
     "can_read_messages": "читать сообщения — без этого бот не увидит ни удалений, ни команд",
-    "can_reply": "отвечать на сообщения — для игр",
+    "can_reply": "отвечать на сообщения — для игр и анимаций",
+    "can_delete_sent_messages": "удалять отправленные сообщения — для анимаций и команд",
     "can_delete_all_messages": "удалять все сообщения — для .mute",
 }
 
@@ -6432,7 +6471,7 @@ BIZ_TELEMETRY_TEXT = (
     "к аккаунтам, — так видно, приносит ли он пользу. Считаем только это время: ни сообщений, "
     "ни собеседников, ни имён.\n\n"
     "Если откажетесь, ничего не изменится — все функции работают как обычно, а в статистике "
-    "останется лишь то, что вы когда-то подключали бота. Передумать можно в /business."
+    "останется лишь то, что вы когда-то подключали бота. Передумать можно в /auto."
 )
 
 
@@ -6457,17 +6496,22 @@ def business_connection_update(connection):
         _biz_store(telemetry)
 
         if now_on and not was_on:
-            text = f"💼 <b>Бот подключён к вашему аккаунту!</b>\n\nЧто теперь умею:\n{BIZ_FEATURES}"
+            text = f"🤖 <b>Автоматизация чатов подключена!</b>\n\nЧто теперь умею:\n{BIZ_FEATURES}"
             missing = _biz_missing_rights(conn)
             if missing:
                 text += ("\n\n⚠️ Чтобы всё работало, разрешите боту в «Telegram для бизнеса → Чат-боты»:\n"
                          + "\n".join(f"• {item}" for item in missing))
             consent = (_biz["users"].get(str(uid)) or {}).get("consent")
-            bot.send_message(conn["chat"], text, parse_mode="HTML")
+            markup = None
+            if not _biz_owner_subscribed(uid):
+                text += ("\n\n📣 <b>Последний шаг:</b> подпишитесь на канал — без подписки "
+                         "автоматизация не включится.")
+                markup = _subscription_keyboard()
+            bot.send_message(conn["chat"], text, parse_mode="HTML", reply_markup=markup)
             if consent is None:
                 bot.send_message(conn["chat"], BIZ_TELEMETRY_TEXT, parse_mode="HTML", reply_markup=_biz_consent_kb())
         elif was_on and not now_on:
-            _biz_notify(conn, "👋 Бот отключён от вашего аккаунта. Будем рады вернуться — /business")
+            _biz_notify(conn, "👋 Бот отключён от вашего аккаунта. Будем рады вернуться — /auto")
         elif now_on:
             missing = _biz_missing_rights(conn)
             if missing:
@@ -6484,8 +6528,8 @@ def business_consent_callback(call):
     _biz_store(lambda state: biz_core.telemetry_set_consent(
         state["users"].setdefault(str(uid), {"consent": None}), consent, connected))
     bot.answer_callback_query(call.id, "Спасибо! 🙌" if consent else "Хорошо, ничего не считаем")
-    note = ("✅ Спасибо! Считаем только время подключения. Передумаете — /business."
-            if consent else "🙅 Договорились: время не считаем, все функции работают как прежде. Передумаете — /business.")
+    note = ("✅ Спасибо! Считаем только время подключения. Передумаете — /auto."
+            if consent else "🙅 Договорились: время не считаем, все функции работают как прежде. Передумаете — /auto.")
     safe_edit_message(call, note)
 
 
@@ -6547,6 +6591,12 @@ def business_message(message):
         sender = message.from_user.id if message.from_user else None
         from_owner = sender == conn["owner"]
         text = (message.text or "").strip()
+        if not from_owner:
+            # Запоминаем всегда: подпишется владелец — удаления уже будет что показать
+            if not _biz_muted(connection_id, message.chat.id):
+                biz_cache.put(connection_id, message.chat.id, message.message_id, biz_core.snapshot(message))
+        if not _biz_require_subscription(conn):
+            return
 
         if from_owner:
             lowered = text.lower()
@@ -6579,6 +6629,10 @@ def business_message(message):
                 else:
                     _biz_notify(conn, "⌨️ Напишите текст после команды: .type Привет, как дела?")
                 return
+            animation = biz_core.parse_animation(message.text) if message.content_type == "text" else None
+            if animation and _biz_settings(conn["owner"])["animations"]:
+                _biz_run_animation(connection_id, message, conn, *animation)
+                return
         elif _biz_muted(connection_id, message.chat.id):
             try:
                 _biz_delete(connection_id, message.chat.id, [message.message_id])
@@ -6589,10 +6643,10 @@ def business_message(message):
                                       "проверьте, что у бота есть право удалять сообщения.")
                 LOGGER.info("Мьют: удаление не удалось: %s", e)
             return
-        else:
-            biz_cache.put(connection_id, message.chat.id, message.message_id, biz_core.snapshot(message))
 
-        if text.lower() in BIZ_GAME_COMMANDS:
+        # У собеседника тоже может быть подключён этот бот: его .игры обработает
+        # его же подключение, а не наше — иначе игра запустится дважды.
+        if text.lower() in BIZ_GAME_COMMANDS and (from_owner or not _biz_owner_connected(sender)):
             _biz_quiet_delete(connection_id, message)
             if _maintenance_applies(sender):
                 _biz_notify(conn, "🛠 Сейчас идут технические работы — игры ненадолго на паузе.")
@@ -6606,8 +6660,21 @@ def business_message(message):
         log_exception("business_message", e)
 
 
+def _biz_mark_removed(message):
+    if message.from_user:
+        _biz_bot_removed[(message.from_user.id, message.text or message.caption or "")] = time.time()
+        while len(_biz_bot_removed) > 2000:
+            _biz_bot_removed.popitem(last=False)
+
+
+def _biz_removed_by_bot(record):
+    at = _biz_bot_removed.get((record.get("from"), record.get("text") or ""))
+    return at is not None and time.time() - at < BIZ_BOT_REMOVED_TTL
+
+
 def _biz_quiet_delete(connection_id, message):
     """Убирает служебную команду из переписки, если у бота есть на это право."""
+    _biz_mark_removed(message)
     try:
         _biz_delete(connection_id, message.chat.id, [message.message_id])
     except Exception:
@@ -6705,6 +6772,22 @@ def _biz_run_dox(connection_id, chat, conn, custom=None):
     _biz_animate(connection_id, chat.id, frames, BIZ_ANIMATION_STEP)
 
 
+def _biz_run_animation(connection_id, message, conn, kind, body):
+    """Сообщение владельца подменяется анимированной копией. Не вышло удалить
+    оригинал — не анимируем, иначе в переписке окажется два одинаковых текста."""
+    _biz_mark_removed(message)
+    try:
+        _biz_delete(connection_id, message.chat.id, [message.message_id])
+    except Exception as e:
+        LOGGER.info("Анимация: не удалось удалить сообщение: %s", e)
+        if conn["owner"] not in _biz_rights_warned:
+            _biz_rights_warned.add(conn["owner"])
+            _biz_notify(conn, "✨ Чтобы анимировать сообщения, разрешите боту удалять отправленные сообщения: "
+                              "Настройки → Telegram для бизнеса → Чат-боты.")
+        return
+    _biz_animate(connection_id, message.chat.id, biz_core.animation_frames(kind, body), BIZ_TYPE_STEP)
+
+
 def _biz_run_typewriter(connection_id, chat_id, body):
     """Текст «печатается»: не больше 10 правок — чаще Telegram начнёт отказывать."""
     body = body[:300]
@@ -6726,12 +6809,13 @@ def business_message_edited(message):
             return
         if message.from_user.id == conn["owner"]:
             return
-        if getattr(message, "via_bot", None):
-            return            # ход в инлайн-игре перерисовывает сообщение — это не правка человека
+        if getattr(message, "via_bot", None) or getattr(message, "sender_business_bot", None):
+            # Ход в инлайн-игре или кадр анимации, которую рисует бот, — это не правка человека
+            return
         new = biz_core.snapshot(message)
         old = biz_cache.get(connection_id, message.chat.id, message.message_id)
         biz_cache.put(connection_id, message.chat.id, message.message_id, new)
-        if not _biz_settings(conn["owner"])["edited"]:
+        if not _biz_settings(conn["owner"])["edited"] or not _biz_require_subscription(conn):
             return
         if old and biz_core.describe(old) == biz_core.describe(new):
             return                                   # поменялось только оформление
@@ -6750,6 +6834,8 @@ def business_messages_deleted(deleted):
         conn = _biz_connection(connection_id)
         if not conn or not conn.get("enabled") or not _biz_settings(conn["owner"])["deleted"]:
             return
+        if not _biz_require_subscription(conn):
+            return
         chat_id = deleted.chat.id
         shown = 0
         for message_id in deleted.message_ids:
@@ -6759,6 +6845,8 @@ def business_messages_deleted(deleted):
             # Без записи не знаем, чьё это сообщение, — молчим, чтобы не докладывать о своих же удалениях
             if not record or record.get("from") == conn["owner"] or shown >= 10:
                 continue
+            if _biz_removed_by_bot(record):
+                continue            # собеседник с этим же ботом: его команду или анимацию убрал бот
             shown += 1
             _biz_notify(conn, f"🗑 {record['name']} · сообщение удалено\n\n{biz_core.describe(record)}",
                         _biz_chat_kb(chat_id))
@@ -7009,12 +7097,13 @@ def business_game_callback(call):
 
 def _business_howto():
     return (
-        "💼 <b>Бот в вашем личном аккаунте — через Telegram Business</b>\n\n"
+        "🤖 <b>Автоматизация чатов</b> — бот помогает в ваших личных переписках. "
+        "Подключается через «Telegram для бизнеса».\n\n"
         f"После подключения:\n{BIZ_FEATURES}\n\n"
         "<b>Как подключить</b> (нужен Telegram Premium):\n"
         "1. Настройки → Telegram для бизнеса → Чат-боты\n"
         f"2. Впишите <code>@{INLINE_BOT_USERNAME}</code> и выберите бота\n"
-        "3. Разрешите: читать сообщения, отвечать, удалять сообщения\n"
+        "3. Разрешите: читать сообщения, отвечать, удалять отправленные и все сообщения\n"
         "4. Выберите, в каких чатах работать, — и готово. Я напишу сюда, когда всё заработает."
     )
 
@@ -7032,9 +7121,10 @@ def _business_status(uid):
     consent = {True: "согласие дано — считаем только время подключения", False: "отказались — время не считаем",
                None: "ещё не ответили"}[user.get("consent")]
     lines = [
-        "💼 <b>Telegram Business подключён</b>", "",
+        "🤖 <b>Автоматизация чатов подключена</b>", "",
         f"🗑 Удалённые сообщения: {'сообщаю' if settings['deleted'] else 'выключено'}",
         f"✏️ Изменённые сообщения: {'сообщаю' if settings['edited'] else 'выключено'}",
+        f"✨ Анимации сообщений: {'включены' if settings['animations'] else 'выключены'}",
         f"🔇 Заглушено собеседников: {len(mutes)}",
         f"📊 Телеметрия: {consent}",
     ]
@@ -7047,7 +7137,9 @@ def _business_status(uid):
                                       callback_data="bzs_deleted"),
            types.InlineKeyboardButton(f"✏️ {'Выключить' if settings['edited'] else 'Включить'} изменённые",
                                       callback_data="bzs_edited"))
-    kb.add(types.InlineKeyboardButton("🕵️ Свой текст для .dox", callback_data="bzs_dox"))
+    kb.row(types.InlineKeyboardButton(f"✨ {'Выключить' if settings['animations'] else 'Включить'} анимации",
+                                      callback_data="bzs_animations"),
+           types.InlineKeyboardButton("🕵️ Свой текст для .dox", callback_data="bzs_dox"))
     if user.get("consent"):
         kb.add(types.InlineKeyboardButton("📊 Отозвать согласие на телеметрию", callback_data="bzc_no"))
     else:
@@ -7055,10 +7147,10 @@ def _business_status(uid):
     return "\n".join(lines), kb
 
 
-@bot.message_handler(commands=["business", "connect"])
+@bot.message_handler(commands=["auto", "automation", "business", "connect"])
 def business_cmd(message):
     if message.chat.type != "private":
-        bot.send_message(message.chat.id, "Настройки Telegram Business — в личке с ботом 🙂")
+        bot.send_message(message.chat.id, "Настройки автоматизации чатов — в личке с ботом 🙂")
         return
     text, kb = _business_status(message.from_user.id)
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
@@ -7093,7 +7185,7 @@ def business_wait_input(message):
     bot.send_message(uid, "✅ Готово! Так закончится .dox:\n\n" + (value or BIZ_DOX_DEFAULT))
 
 
-@bot.callback_query_handler(func=lambda c: c.data in ("bzs_deleted", "bzs_edited"))
+@bot.callback_query_handler(func=lambda c: c.data in ("bzs_deleted", "bzs_edited", "bzs_animations"))
 def business_settings_callback(call):
     uid = call.from_user.id
     key = call.data[len("bzs_"):]
@@ -7108,7 +7200,7 @@ def _admin_business_text():
     summary = biz_core.telemetry_summary(_biz["users"])
     # Про отказавшихся показываем только то, что они подключали бота
     return (
-        "💼 <b>Telegram Business</b>\n\n"
+        "🤖 <b>Автоматизация чатов</b>\n\n"
         f"👥 Всего подключали: <b>{summary['total']}</b>\n\n"
         "📊 Телеметрия (только у согласившихся):\n"
         f"• согласились: {summary['consented']}, отказались: {summary['declined']}, "
@@ -7463,7 +7555,7 @@ def _admin_panel_kb():
     kb.row(btn("🏆 Достижения", "admin_achievements"), btn("💾 Backup", "admin_backup"))
     kb.row(btn("📣 Рассылка", "admin_broadcast"), btn("🎉 Ивенты", "admin_events"))
     fresh = sum(1 for item in _idea_items() if item.get("status") == "new")
-    kb.row(btn(f"💡 Предложения{f' ({fresh} новых)' if fresh else ''}", "admin_ideas"), btn("💼 Бизнес", "admin_business"))
+    kb.row(btn(f"💡 Предложения{f' ({fresh} новых)' if fresh else ''}", "admin_ideas"), btn("🤖 Автоматизация", "admin_business"))
     if maintenance_active():
         kb.row(btn("✏️ Текст для игроков", "admin_mnt_note"), btn("👁 Как видят игроки", "admin_mnt_preview"))
         kb.row(btn("✅ Завершить тех. работы", "admin_mnt_off"))
@@ -14376,6 +14468,7 @@ def _webapp_profile(user_id, tg_user=None):
         "titles": rec.get("titles") if isinstance(rec.get("titles"), list) else [],
         "records": _records_of(rec),
         "maintenance": _maintenance_public(user_id),
+        "subscription": _webapp_subscription(user_id),
         "season": {
             "active": season_active(),
             "level": level, "into": into, "per": per, "max": ev.SEASON_MAX_LEVEL,
@@ -14744,20 +14837,38 @@ def _card_table_view(table):
     return {"table": view}
 
 
+def _webapp_subscription(user_id):
+    """Mini App открывается кнопкой «Играть» у любого, кто написал боту, — подписку
+    проверяем здесь, как в /start. None — подписка не нужна или уже есть."""
+    if not user_id or not REQUIRED_CHANNEL or _is_bot_admin(user_id) or is_user_subscribed(user_id):
+        return None
+    return {"required": True, "channel": REQUIRED_CHANNEL, "channel_url": _channel_url()}
+
+
+def _webapp_subscribed_only(handler):
+    """Без подписки — ни игр с наградами, ни покупок: сервер отвечает «subscribe»."""
+    @functools.wraps(handler)
+    def wrapper(uid, tg_user, payload):
+        if _webapp_subscription(uid):
+            raise ValueError("subscribe")
+        return handler(uid, tg_user, payload)
+    return wrapper
+
+
 webapp_server = create_webapp(
     bot_token=TOKEN,
     dataset_provider=_webapp_datasets,
     profile_provider=_webapp_profile,
-    result_handler=_webapp_apply_result,
+    result_handler=_webapp_subscribed_only(_webapp_apply_result),
     allow_unsigned=WEBAPP_ALLOW_UNSIGNED,
-    actions={
+    actions={name: _webapp_subscribed_only(handler) for name, handler in {
         "luck": _webapp_luck,
         "records": _webapp_records,
         "shop": _webapp_shop,
         "season": _webapp_season,
         "gift": _webapp_gift,
         "idea": _webapp_idea,
-    },
+    }.items()},
 )
 
 

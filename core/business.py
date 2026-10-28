@@ -253,3 +253,60 @@ def telemetry_summary(users, now=None):
         "seconds_total": sum(seconds),
         "seconds_avg": int(sum(seconds) / len(seconds)) if seconds else 0,
     }
+
+
+# ------------------------------- анимации сообщений -------------------------------
+
+# Владелец начинает сообщение со спецсимвола — бот заменяет его анимированной копией.
+# Кадров не больше 10: чаще правки Telegram начинает отклонять.
+ANIMATIONS = {
+    "~": ("words", "по словам"),
+    "^": ("letters", "по буквам"),
+    "%": ("decode", "расшифровка"),
+}
+ANIMATION_MAX_FRAMES = 10
+ANIMATION_MAX_LEN = {"words": 1000, "letters": 300, "decode": 300}
+_NOISE = "█▓▒░#@$&*?"
+
+
+def parse_animation(text):
+    """'~Привет всем' → ('words', 'Привет всем'); не анимация → None.
+
+    Сразу за символом должен идти текст: «~ ок» или одиночное «~» — обычное сообщение.
+    """
+    text = text or ""
+    if len(text) < 3 or text[0] not in ANIMATIONS or text[1].isspace():
+        return None
+    body = text[1:].strip()
+    if len(body) < 2:
+        return None
+    kind = ANIMATIONS[text[0]][0]
+    return kind, body[:ANIMATION_MAX_LEN[kind]]
+
+
+def animation_frames(kind, body, rng=random):
+    """Кадры анимации; последний — сам текст."""
+    if kind == "words":
+        words = body.split(" ")
+        steps = min(ANIMATION_MAX_FRAMES, len(words))
+        frames = [" ".join(words[:-(-len(words) * i // steps)]) for i in range(1, steps)]
+    elif kind == "letters":
+        steps = max(1, min(ANIMATION_MAX_FRAMES, len(body)))
+        size = -(-len(body) // steps)
+        frames = [body[:size * i] + "▌" for i in range(1, steps)]
+    else:
+        # Буквы проявляются в случайном порядке, остальное — «шум»
+        hidden = [i for i, ch in enumerate(body) if not ch.isspace()]
+        rng.shuffle(hidden)
+        steps = ANIMATION_MAX_FRAMES
+        frames = []
+        for i in range(steps - 1):
+            still = set(hidden[-(-len(hidden) * i // steps):]) if i else set(hidden)
+            frames.append("".join(rng.choice(_NOISE) if j in still else ch for j, ch in enumerate(body)))
+    frames = [f for f in frames if f.strip()]
+    # Соседние одинаковые кадры Telegram не примет («message is not modified»)
+    out = []
+    for frame in frames + [body]:
+        if not out or out[-1] != frame:
+            out.append(frame)
+    return out
