@@ -4,6 +4,7 @@ import re
 import requests
 from telebot.apihelper import ApiTelegramException
 import random
+import functools
 import time
 import logging
 import traceback
@@ -25,6 +26,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from bussines_bot import is_business_game_trigger, register_business_handlers
 from core.db import (
+    BusinessMessageStore,
     backup_database,
     checkpoint as checkpoint_database,
     database_is_healthy,
@@ -3165,6 +3167,7 @@ def _room_close(code, reason=""):
 def _games_watchdog(interval=60):
     """Раз в минуту выгружает партии, которые создались и остались без игрока,
     и следит, доиграны ли партии во время тех. работ."""
+    ticks = 0
     while not _shutdown_event.wait(interval):
         try:
             dropped = sum(store.sweep() for store in _GAME_STORES)
@@ -3176,6 +3179,12 @@ def _games_watchdog(interval=60):
             _maintenance_watch()
         except Exception as e:
             log_exception("maintenance_watch", e)
+        ticks += 1
+        if ticks % 10 == 0 and any(_biz_counts.values()):
+            LOGGER.info("Business за 10 мин: сообщений %(message)s, правок %(edited)s, "
+                        "удалений %(deleted)s, подключений %(connection)s", dict(_biz_counts))
+            for key in _biz_counts:
+                _biz_counts[key] = 0
 
 
 def _rooms_watchdog():
@@ -5970,6 +5979,7 @@ def _send_home_menu(message):
 @bot.message_handler(commands=["start"])
 def start(message):
     uid = message.from_user.id
+    _biz_blocked.pop(uid, None)        # нажал /start — значит, разблокировал
     if not _guard_user(uid, chat_id=message.chat.id, action="start", require_subscription=False):
         return
     # Проверяем до _send_home_menu: он создаёт запись пользователя.
@@ -6158,10 +6168,16 @@ def shop_callbacks(call):
 # ---------------------------------------------------------------------------
 _biz = {}
 _biz_lock = threading.Lock()
-biz_cache = biz_core.MessageCache()
+biz_cache = biz_core.MessageCache(store=BusinessMessageStore(DB_FILE))
+# Сколько бизнес-событий пришло — раз в 10 минут уходит в лог (только числа, без текста)
+_biz_counts = {"message": 0, "edited": 0, "deleted": 0, "connection": 0}
 biz_games = BoundedGames()
 # Сообщения, которые удалил сам бот (мьют), — об их удалении не докладываем
 _biz_self_deleted = OrderedDict()
+# Что бот убрал из переписки сам (команды), по автору и тексту: у собеседника
+# может быть подключён этот же бот, и номера сообщений там другие.
+_biz_bot_removed = OrderedDict()
+BIZ_BOT_REMOVED_TTL = 120
 _biz_rights_warned = set()
 BIZ_DICE_DELAY = 3.6           # сколько крутится анимация кубика в Telegram
 BIZ_GAME_COMMANDS = {
@@ -6244,11 +6260,58 @@ def _biz_settings(uid):
     return settings
 
 
+# Владелец мог подключить бота и заблокировать его: Telegram всё равно шлёт
+# бизнес-апдейты, но писать ему нельзя. Пока не прошёл срок — даже не пытаемся.
+BIZ_BLOCKED_RETRY = 6 * 3600
+_biz_blocked = {}
+
+
 def _biz_notify(conn, text, reply_markup=None):
+    owner = conn.get("owner")
+    if time.time() - _biz_blocked.get(owner, 0) < BIZ_BLOCKED_RETRY:
+        return None
     try:
-        return bot.send_message(conn["chat"], text, reply_markup=reply_markup)
+        message = bot.send_message(conn["chat"], text, reply_markup=reply_markup)
+        _biz_blocked.pop(owner, None)
+        return message
     except Exception as e:
-        LOGGER.info("Не удалось написать владельцу бизнес-подключения %s: %s", conn.get("owner"), e)
+        if getattr(e, "error_code", None) == 403:
+            _biz_blocked[owner] = time.time()
+            LOGGER.info("Владелец бизнес-подключения %s заблокировал бота — молчу %d ч",
+                        owner, BIZ_BLOCKED_RETRY // 3600)
+        else:
+            LOGGER.info("Не удалось написать владельцу бизнес-подключения %s: %s", owner, e)
+
+
+# Бизнес-функции — для подписчиков канала, как и весь бот. Отказ кэшируем
+# ненадолго: иначе каждое сообщение собеседника стоило бы запроса к Telegram.
+BIZ_SUBSCRIPTION_RECHECK = 120
+BIZ_SUBSCRIPTION_REMIND = 6 * 3600
+_biz_subscription = {}
+_biz_subscription_reminded = {}
+
+
+def _biz_owner_subscribed(uid):
+    if not REQUIRED_CHANNEL or _is_bot_admin(uid):
+        return True
+    at, ok = _biz_subscription.get(uid, (0, False))
+    if time.time() - at < (SUBSCRIPTION_CACHE_TTL if ok else BIZ_SUBSCRIPTION_RECHECK):
+        return ok
+    ok = is_user_subscribed(uid)
+    _biz_subscription[uid] = (time.time(), ok)
+    return ok
+
+
+def _biz_require_subscription(conn):
+    """True — владелец подписан; иначе (не чаще раза в 6 ч) напоминает о подписке."""
+    uid = conn["owner"]
+    if _biz_owner_subscribed(uid):
+        return True
+    if time.time() - _biz_subscription_reminded.get(uid, 0) > BIZ_SUBSCRIPTION_REMIND:
+        _biz_subscription_reminded[uid] = time.time()
+        _biz_notify(conn, "💼 Бот в личных переписках работает для подписчиков канала. Подпишитесь — "
+                          "и удаления, правки и игры сразу заработают.", _subscription_keyboard())
+    return False
 
 
 def _biz_chat_kb(chat_id):
@@ -6260,7 +6323,7 @@ def _biz_chat_kb(chat_id):
 # --------------------------------- подключение ---------------------------------
 
 BIZ_FEATURES = (
-    "🗑 собеседник удалил сообщение — покажу, что там было\n"
+    "🗑 собеседник удалил сообщение — покажу, что там было (помню сообщения 3 дня)\n"
     "✏️ собеседник изменил сообщение — покажу, как было и как стало\n"
     "🎮 игры прямо в переписке: напишите в чате <code>.игры</code> "
     "(или сразу <code>.rps</code>, <code>.ttt</code>, <code>.dice</code>)\n"
@@ -6299,10 +6362,14 @@ BIZ_TELEMETRY_TEXT = (
 
 @bot.business_connection_handler(func=lambda c: True)
 def business_connection_update(connection):
+    _biz_counts["connection"] += 1
+    LOGGER.info("Business: подключение %s владельца %s, включено=%s",
+                connection.id[:8], connection.user.id, connection.is_enabled)
     try:
         before = _biz["connections"].get(connection.id) or {}
         conn = _biz_save_connection(connection)
         uid = conn["owner"]
+        _biz_blocked.pop(uid, None)
         was_on, now_on = bool(before.get("enabled")), conn["enabled"]
 
         def telemetry(state):
@@ -6320,7 +6387,12 @@ def business_connection_update(connection):
                 text += ("\n\n⚠️ Чтобы всё работало, разрешите боту в «Telegram для бизнеса → Чат-боты»:\n"
                          + "\n".join(f"• {item}" for item in missing))
             consent = (_biz["users"].get(str(uid)) or {}).get("consent")
-            bot.send_message(conn["chat"], text, parse_mode="HTML")
+            markup = None
+            if not _biz_owner_subscribed(uid):
+                text += ("\n\n📣 <b>Последний шаг:</b> подпишитесь на канал — без подписки "
+                         "функции не включатся.")
+                markup = _subscription_keyboard()
+            bot.send_message(conn["chat"], text, parse_mode="HTML", reply_markup=markup)
             if consent is None:
                 bot.send_message(conn["chat"], BIZ_TELEMETRY_TEXT, parse_mode="HTML", reply_markup=_biz_consent_kb())
         elif was_on and not now_on:
@@ -6395,6 +6467,7 @@ def _biz_muted(connection_id, chat_id):
     "location", "contact", "dice", "poll",
 ])
 def business_message(message):
+    _biz_counts["message"] += 1
     try:
         connection_id = message.business_connection_id
         conn = _biz_connection(connection_id)
@@ -6403,6 +6476,12 @@ def business_message(message):
         sender = message.from_user.id if message.from_user else None
         from_owner = sender == conn["owner"]
         text = (message.text or "").strip()
+        if not from_owner:
+            # Запоминаем всегда: подпишется владелец — удаления уже будет что показать
+            if not _biz_muted(connection_id, message.chat.id):
+                biz_cache.put(connection_id, message.chat.id, message.message_id, biz_core.snapshot(message))
+        if not _biz_require_subscription(conn):
+            return
 
         if from_owner:
             lowered = text.lower()
@@ -6429,10 +6508,10 @@ def business_message(message):
                                       "проверьте, что у бота есть право удалять сообщения.")
                 LOGGER.info("Мьют: удаление не удалось: %s", e)
             return
-        else:
-            biz_cache.put(connection_id, message.chat.id, message.message_id, biz_core.snapshot(message))
 
-        if text.lower() in BIZ_GAME_COMMANDS:
+        # У собеседника тоже может быть подключён этот бот: его .игры обработает
+        # его же подключение, а не наше — иначе игра запустится дважды.
+        if text.lower() in BIZ_GAME_COMMANDS and (from_owner or not _biz_owner_connected(sender)):
             _biz_quiet_delete(connection_id, message)
             if _maintenance_applies(sender):
                 _biz_notify(conn, "🛠 Сейчас идут технические работы — игры ненадолго на паузе.")
@@ -6446,8 +6525,21 @@ def business_message(message):
         log_exception("business_message", e)
 
 
+def _biz_mark_removed(message):
+    if message.from_user:
+        _biz_bot_removed[(message.from_user.id, message.text or message.caption or "")] = time.time()
+        while len(_biz_bot_removed) > 2000:
+            _biz_bot_removed.popitem(last=False)
+
+
+def _biz_removed_by_bot(record):
+    at = _biz_bot_removed.get((record.get("from"), record.get("text") or ""))
+    return at is not None and time.time() - at < BIZ_BOT_REMOVED_TTL
+
+
 def _biz_quiet_delete(connection_id, message):
     """Убирает служебную команду из переписки, если у бота есть на это право."""
+    _biz_mark_removed(message)
     try:
         _biz_delete(connection_id, message.chat.id, [message.message_id])
     except Exception:
@@ -6458,6 +6550,7 @@ def _biz_quiet_delete(connection_id, message):
     "text", "photo", "video", "animation", "audio", "document",
 ])
 def business_message_edited(message):
+    _biz_counts["edited"] += 1
     try:
         connection_id = message.business_connection_id
         conn = _biz_connection(connection_id)
@@ -6465,10 +6558,13 @@ def business_message_edited(message):
             return
         if message.from_user.id == conn["owner"]:
             return
+        if getattr(message, "via_bot", None) or getattr(message, "sender_business_bot", None):
+            # Ход в игре перерисовывает сообщение — это не правка человека
+            return
         new = biz_core.snapshot(message)
         old = biz_cache.get(connection_id, message.chat.id, message.message_id)
         biz_cache.put(connection_id, message.chat.id, message.message_id, new)
-        if not _biz_settings(conn["owner"])["edited"]:
+        if not _biz_settings(conn["owner"])["edited"] or not _biz_require_subscription(conn):
             return
         if old and biz_core.describe(old) == biz_core.describe(new):
             return                                   # поменялось только оформление
@@ -6487,10 +6583,13 @@ BIZ_MEDIA_SENDERS = {
 
 @bot.deleted_business_messages_handler(func=lambda d: True)
 def business_messages_deleted(deleted):
+    _biz_counts["deleted"] += 1
     try:
         connection_id = deleted.business_connection_id
         conn = _biz_connection(connection_id)
         if not conn or not conn.get("enabled") or not _biz_settings(conn["owner"])["deleted"]:
+            return
+        if not _biz_require_subscription(conn):
             return
         chat_id = deleted.chat.id
         shown = 0
@@ -6501,6 +6600,8 @@ def business_messages_deleted(deleted):
             # Без записи не знаем, чьё это сообщение, — молчим, чтобы не докладывать о своих же удалениях
             if not record or record.get("from") == conn["owner"] or shown >= 10:
                 continue
+            if _biz_removed_by_bot(record):
+                continue            # собеседник с этим же ботом: его команду убрал бот
             shown += 1
             _biz_notify(conn, f"🗑 {record['name']} · сообщение удалено\n\n{biz_core.describe(record)}",
                         _biz_chat_kb(chat_id))
@@ -7083,6 +7184,13 @@ def _maintenance_intercept(update):
         bot._exec_task(_maintenance_reply_message, message)
     return True
 
+
+# Какие события просить у Telegram. Без явного списка Telegram присылает тот,
+# что бот запросил когда-то раньше, — и бизнес-события туда могли не попасть:
+# тогда уведомления об удалённых сообщениях молчат без единой ошибки в логе.
+# Участники групп и реакции боту не нужны — они только шумят.
+ALLOWED_UPDATES = [kind for kind in telebot.util.update_types
+                   if kind not in ("chat_member", "message_reaction", "message_reaction_count")]
 
 _original_process_new_updates = bot.process_new_updates
 
@@ -14059,6 +14167,7 @@ def _webapp_datasets():
 def _webapp_profile(user_id, tg_user=None):
     if tg_user and tg_user.get("first_name"):
         _remember_display_name(user_id, tg_user)
+    _grant_event_titles(user_id)
     rec, unlocked = _load_profile(user_id)
     completed_quests, total_quests = _quest_completion_summary(user_id)
     hw_bucket = _hw_bucket(rec)
@@ -14083,6 +14192,7 @@ def _webapp_profile(user_id, tg_user=None):
         "titles": rec.get("titles") if isinstance(rec.get("titles"), list) else [],
         "records": _records_of(rec),
         "maintenance": _maintenance_public(user_id),
+        "subscription": _webapp_subscription(user_id),
         "season": {
             "active": season_active(),
             "level": level, "into": into, "per": per, "max": ev.SEASON_MAX_LEVEL,
@@ -14451,20 +14561,38 @@ def _card_table_view(table):
     return {"table": view}
 
 
+def _webapp_subscription(user_id):
+    """Mini App открывается кнопкой «Играть» у любого, кто написал боту, — подписку
+    проверяем здесь, как в /start. None — подписка не нужна или уже есть."""
+    if not user_id or not REQUIRED_CHANNEL or _is_bot_admin(user_id) or is_user_subscribed(user_id):
+        return None
+    return {"required": True, "channel": REQUIRED_CHANNEL, "channel_url": _channel_url()}
+
+
+def _webapp_subscribed_only(handler):
+    """Без подписки — ни игр с наградами, ни покупок: сервер отвечает «subscribe»."""
+    @functools.wraps(handler)
+    def wrapper(uid, tg_user, payload):
+        if _webapp_subscription(uid):
+            raise ValueError("subscribe")
+        return handler(uid, tg_user, payload)
+    return wrapper
+
+
 webapp_server = create_webapp(
     bot_token=TOKEN,
     dataset_provider=_webapp_datasets,
     profile_provider=_webapp_profile,
-    result_handler=_webapp_apply_result,
+    result_handler=_webapp_subscribed_only(_webapp_apply_result),
     allow_unsigned=WEBAPP_ALLOW_UNSIGNED,
-    actions={
+    actions={name: _webapp_subscribed_only(handler) for name, handler in {
         "luck": _webapp_luck,
         "records": _webapp_records,
         "shop": _webapp_shop,
         "season": _webapp_season,
         "gift": _webapp_gift,
         "idea": _webapp_idea,
-    },
+    }.items()},
 )
 
 
@@ -14598,6 +14726,7 @@ def show_main_menu(chat_id, uid):
 # Карточка-хаб главного меню: профиль, прогресс, текущее событие и кнопки
 # ко всему новому. Клавиатура внизу остаётся — к ней привыкли.
 def _hub_text(uid):
+    _grant_event_titles(uid)
     user, unlocked = _load_profile(uid)
     name = html.escape(str(user.get("display_name") or f"user_{uid}"))
     frame = {
@@ -15164,7 +15293,7 @@ if __name__ == "__main__":
         LOGGER.info("Бот запущен, Mini App выключен")
     while not _shutdown_event.is_set():
         try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30)
+            bot.infinity_polling(timeout=30, long_polling_timeout=30, allowed_updates=ALLOWED_UPDATES)
         except Exception as e:
             if _shutdown_event.is_set():
                 break

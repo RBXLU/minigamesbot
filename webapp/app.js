@@ -17,6 +17,7 @@ let currentScreen = null;
 let currentTab = 'games';
 let inGame = false;
 let maintenanceShown = false;
+let subscribeShown = false;
 
 /* ---------- режим отображения ---------- */
 
@@ -155,7 +156,7 @@ async function api(path, body) {
     let code = 'HTTP ' + res.status;
     try { code = (await res.json()).error || code; } catch (e) { /* не JSON */ }
     // Тех. работы начались, пока игрок был внутри — узнаём подробности для заглушки
-    if (code === 'maintenance') setTimeout(() => refreshProfile(false), 0);
+    if (code === 'maintenance' || code === 'subscribe') setTimeout(() => refreshProfile(false), 0);
     throw new Error(ERRORS[code] || code);
   }
   return res.json();
@@ -173,7 +174,8 @@ const ERRORS = {
   'no active hand': 'Эта раздача уже закончилась',
   'not for sale': 'Этот предмет не продаётся',
   'not owned': 'Сначала купите предмет',
-  'maintenance': '🛠 Идут технические работы — новые партии ненадолго на паузе'
+  'maintenance': '🛠 Идут технические работы — новые партии ненадолго на паузе',
+  'subscribe': '📣 Сначала подпишитесь на канал — это бесплатно'
 };
 const IDEA_KINDS = { game: '🎮 Новая игра', update: '✨ Улучшение' };
 const IDEA_STATUS = { new: '🆕 читаем', accepted: '✅ в работе', declined: '💤 отложена' };
@@ -186,6 +188,7 @@ function setCoins(profile) {
   PROFILE = profile;
   if (skinChanged) applyLook();
   updatePumpkins();
+  syncSubscription(false);
   syncMaintenance(false);
 
   if (previous === null || previous === profile.coins || REDUCED_MOTION) {
@@ -240,7 +243,7 @@ function openScreen(title, showBack, builder) {
   titleEl.textContent = title;
   replay(titleEl, 'slide-in');
   inGame = showBack;
-  const showTabs = !showBack && !maintenanceShown;
+  const showTabs = !showBack && !maintenanceShown && !subscribeShown;
   backEl.hidden = !showBack;
   tabsEl.hidden = !showTabs;
   document.body.classList.toggle('with-tabs', showTabs);
@@ -300,10 +303,7 @@ const TABS = {
 };
 
 function openTab(name) {
-  if (maintenanceBlocks()) {
-    showMaintenance();
-    return;
-  }
+  if (showLock()) return;
   currentTab = TABS[name] ? name : 'games';
   tabsEl.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.tab === currentTab));
   const [title, builder] = TABS[currentTab];
@@ -494,6 +494,63 @@ function buildHome(root) {
   idea.addEventListener('click', event => { if (!event.target.closest('button')) openIdea(); });
 }
 
+/* ---------- подписка на канал ---------- */
+
+function subscriptionInfo() {
+  const info = PROFILE && PROFILE.subscription;
+  return info && info.required ? info : null;
+}
+
+function subscriptionBlocks() {
+  return !!subscriptionInfo();
+}
+
+/** Закрывает игру заглушкой, если нужна подписка или идут тех. работы. */
+function showLock() {
+  if (subscriptionBlocks()) {
+    showSubscribe();
+    return true;
+  }
+  if (maintenanceBlocks()) {
+    showMaintenance();
+    return true;
+  }
+  return false;
+}
+
+function showSubscribe() {
+  subscribeShown = true;
+  openScreen('Почти готово', false, root => buildSubscribe(root));
+}
+
+function syncSubscription(manual) {
+  if (subscriptionBlocks()) {
+    if (manual || (!subscribeShown && !inGame)) showSubscribe();
+    if (manual) toast('Подписка пока не видна — подпишитесь и нажмите ещё раз', 2600);
+  } else if (subscribeShown) {
+    subscribeShown = false;
+    toast('🎉 Подписка есть — приятной игры!', 2400);
+    openTab('games');
+  }
+}
+
+function buildSubscribe(root) {
+  const info = subscriptionInfo() || {};
+  const box = el('div', 'maint');
+  const art = el('div', 'maint-art');
+  art.appendChild(el('span', null, '📣'));
+  box.appendChild(art);
+  box.appendChild(el('h1', null, 'Подпишитесь на канал'));
+  box.appendChild(el('p', null,
+    'Все игры бесплатные — мы просим только подписаться на наш канал. ' +
+    'Там новости, ивенты и розыгрыши.'));
+  if (info.channel_url) {
+    box.appendChild(button('📣 Подписаться', 'btn wide', () => openLink(info.channel_url)));
+  }
+  box.appendChild(button('Я подписался — проверить', 'btn wide secondary', () => refreshProfile(true)));
+  root.appendChild(box);
+}
+
 /* ---------- технические работы ---------- */
 
 function maintenanceInfo() {
@@ -514,6 +571,7 @@ function showMaintenance() {
 
 /** Сверяет экран с сервером: начатую партию не прерываем, заглушка ждёт выхода из неё. */
 function syncMaintenance(manual) {
+  if (subscriptionBlocks()) return;          // сначала подписка, потом всё остальное
   const blocked = maintenanceBlocks();
   if (blocked) {
     if (manual || (!maintenanceShown && !inGame)) showMaintenance();
@@ -532,7 +590,10 @@ async function refreshProfile(manual) {
     if (manual) toast(e.message);
     return;
   }
-  if (manual) syncMaintenance(true);
+  if (manual) {
+    syncSubscription(true);
+    syncMaintenance(true);
+  }
 }
 
 function openLink(url) {
@@ -641,10 +702,7 @@ function sketchPreview(sketch) {
 }
 
 function openIdea() {
-  if (maintenanceBlocks()) {
-    showMaintenance();
-    return;
-  }
+  if (showLock()) return;
   openScreen('Предложить идею', true, root => buildIdea(root));
 }
 
@@ -1085,10 +1143,7 @@ function openChatGame(name, query) {
 const GAMES = {};
 
 function openGame(key, name) {
-  if (maintenanceBlocks()) {
-    showMaintenance();
-    return;
-  }
+  if (showLock()) return;
   const builder = GAMES[key];
   if (!builder) {
     toast('Эту игру ещё доделываем — скоро будет');

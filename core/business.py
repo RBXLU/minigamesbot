@@ -103,17 +103,24 @@ def describe(record):
 
 class MessageCache:
     """Помнит последние сообщения бизнес-чатов: без этого об удалении известны
-    только номера сообщений. Живёт в памяти и ограничена — и по числу, и по
-    возрасту: переписку на диск не кладём."""
+    только номера сообщений. Свежие — в памяти, а копия — в store (база), чтобы
+    перезапуск бота не стирал память. Всё старше ttl выбрасывается."""
 
-    def __init__(self, limit=20000, ttl=3 * 86400):
+    PURGE_EVERY = 500
+
+    def __init__(self, limit=20000, ttl=3 * 86400, store=None):
         self._items = OrderedDict()
         self._limit = limit
         self._ttl = ttl
+        self._store = store
+        self._puts = 0
 
     @staticmethod
     def key(connection_id, chat_id, message_id):
         return f"{connection_id}:{chat_id}:{message_id}"
+
+    def _fresh(self, record):
+        return bool(record) and time.time() - record.get("at", 0) <= self._ttl
 
     def put(self, connection_id, chat_id, message_id, record):
         key = self.key(connection_id, chat_id, message_id)
@@ -121,17 +128,28 @@ class MessageCache:
         self._items.move_to_end(key)
         while len(self._items) > self._limit:
             self._items.popitem(last=False)
+        if self._store is not None:
+            self._store.put(key, record)
+            self._puts += 1
+            if self._puts % self.PURGE_EVERY == 0:
+                self._store.purge(time.time() - self._ttl)
 
     def get(self, connection_id, chat_id, message_id):
-        record = self._items.get(self.key(connection_id, chat_id, message_id))
-        if record and time.time() - record.get("at", 0) > self._ttl:
-            self._items.pop(self.key(connection_id, chat_id, message_id), None)
+        key = self.key(connection_id, chat_id, message_id)
+        record = self._items.get(key)
+        if record is None and self._store is not None:
+            record = self._store.get(key)
+        if not self._fresh(record):
+            self._items.pop(key, None)
             return None
         return record
 
     def pop(self, connection_id, chat_id, message_id):
         record = self.get(connection_id, chat_id, message_id)
-        self._items.pop(self.key(connection_id, chat_id, message_id), None)
+        key = self.key(connection_id, chat_id, message_id)
+        self._items.pop(key, None)
+        if self._store is not None:
+            self._store.delete(key)
         return record
 
     def __len__(self):
