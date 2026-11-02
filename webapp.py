@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -11,6 +12,8 @@ from flask import Flask, jsonify, request, send_from_directory
 
 STATIC_DIR = Path(__file__).parent / "webapp"
 INIT_DATA_MAX_AGE = 24 * 3600
+ACTION_WINDOW = 10        # секунд
+ACTION_BURST = 40         # действий за окно: игре хватает с запасом, спаму — нет
 
 
 def verify_init_data(init_data, bot_token, max_age=INIT_DATA_MAX_AGE):
@@ -52,9 +55,28 @@ def create_app(bot_token, dataset_provider, profile_provider, result_handler, al
     actions: {имя: handler(uid, user, payload)} для /api/action/<имя>."""
     actions = actions or {}
     app = Flask(__name__, static_folder=None)
+    # Запросы игры — пара сотен байт; тело в сотни мегабайт положило бы бота вместе с сервером
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+    hits = {}
+    hits_lock = threading.Lock()
+
+    def _too_fast(uid):
+        """Не больше ACTION_BURST действий за ACTION_WINDOW секунд на человека."""
+        now = time.monotonic()
+        with hits_lock:
+            recent = [t for t in hits.get(uid, ()) if now - t < ACTION_WINDOW]
+            if len(recent) >= ACTION_BURST:
+                hits[uid] = recent
+                return True
+            recent.append(now)
+            hits[uid] = recent
+            if len(hits) > 10000:
+                for key in [k for k, v in hits.items() if not v or now - v[-1] > ACTION_WINDOW]:
+                    hits.pop(key, None)
+        return False
 
     def _current_user():
-        init_data = request.headers.get("X-Telegram-Init-Data") or (request.json or {}).get("initData", "")
+        init_data = request.headers.get("X-Telegram-Init-Data") or (request.get_json(silent=True) or {}).get("initData", "")
         user = verify_init_data(init_data, bot_token)
         if user is None and allow_unsigned:
             return {"id": 0, "first_name": "Гость", "unsigned": True}
@@ -62,8 +84,8 @@ def create_app(bot_token, dataset_provider, profile_provider, result_handler, al
 
     @app.after_request
     def _headers(response):
-        response.headers["X-Frame-Options"] = "ALLOWALL"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
     @app.route("/")
@@ -92,13 +114,19 @@ def create_app(bot_token, dataset_provider, profile_provider, result_handler, al
     @app.route("/api/report", methods=["POST"])
     def api_report():
         user = _current_user()
-        if not user:
+        if not user or user.get("unsigned"):
             return jsonify({"error": "unauthorized"}), 401
-        payload = request.json or {}
+        if _too_fast(user["id"]):
+            return jsonify({"error": "too fast"}), 429
+        payload = request.get_json(silent=True) or {}
         try:
             return jsonify(result_handler(user["id"], user, payload))
-        except Exception as exc:
+        except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        except Exception:
+            # Текст исключения наружу не отдаём: в нём могут быть пути, SQL и прочие детали
+            app.logger.exception("api_report")
+            return jsonify({"error": "server error"}), 500
 
     @app.route("/api/action/<name>", methods=["POST"])
     def api_action(name):
@@ -109,8 +137,10 @@ def create_app(bot_token, dataset_provider, profile_provider, result_handler, al
         if not user or user.get("unsigned"):
             # Действия меняют баланс — гостю без подписи Telegram они недоступны.
             return jsonify({"error": "unauthorized"}), 401
+        if _too_fast(user["id"]):
+            return jsonify({"error": "too fast"}), 429
         try:
-            return jsonify(handler(user["id"], user, request.json or {}))
+            return jsonify(handler(user["id"], user, request.get_json(silent=True) or {}))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 

@@ -25,10 +25,23 @@ BUSINESS_GAME_ALIASES = {
     },
 }
 
+class _CappedGames(dict):
+    """Партия создаётся на любое «2048» или «тетрис» в любом чате — храним
+    только последние, иначе память росла бы без конца."""
+
+    LIMIT = 2000
+
+    def __setitem__(self, key, value):
+        super().pop(key, None)
+        super().__setitem__(key, value)
+        while len(self) > self.LIMIT:
+            super().pop(next(iter(self)))
+
+
 _business_runtime = {
-    "games_2048": {},
-    "games_tetris": {},
-    "games_guess": {},
+    "games_2048": _CappedGames(),
+    "games_tetris": _CappedGames(),
+    "games_guess": _CappedGames(),
 }
 
 

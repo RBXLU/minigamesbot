@@ -27,7 +27,7 @@ def clamp_bet(bet, balance):
     """Ставка в допустимых пределах; None, если на балансе меньше минимума."""
     try:
         bet = int(bet)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):     # OverflowError — ставка 1e999
         bet = BET_MIN
     bet = max(BET_MIN, min(BET_MAX, bet))
     if balance < BET_MIN:

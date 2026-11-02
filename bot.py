@@ -115,6 +115,27 @@ def _prune_log_archives():
             pass
 
 
+# Ошибки сети из requests/telebot содержат адрес вида /bot<TOKEN>/getUpdates —
+# с ним токен оказывался бы в логах, архивах логов и в оповещениях админам.
+_TOKEN_PATTERN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
+
+
+def redact_secrets(text):
+    return _TOKEN_PATTERN.sub("<TOKEN>", str(text))
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record):
+        return redact_secrets(super().format(record))
+
+
+def _redact_logger(name):
+    """Чужие логгеры (TeleBot) печатают в консоль хостинга — им тоже прячем токен."""
+    for handler in logging.getLogger(name).handlers:
+        fmt = handler.formatter
+        handler.setFormatter(_RedactingFormatter(fmt._fmt if fmt else None, fmt.datefmt if fmt else None))
+
+
 def _setup_logging():
     LOGS_DIR.mkdir(exist_ok=True)
     logger = logging.getLogger("telegram_games_bot")
@@ -124,7 +145,7 @@ def _setup_logging():
     archived = _archive_previous_logs()
 
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
+    formatter = _RedactingFormatter(
         "%(asctime)s | %(levelname)s | %(threadName)s | %(message)s"
     )
 
@@ -150,6 +171,7 @@ def _setup_logging():
 
 
 LOGGER = _setup_logging()
+_redact_logger("TeleBot")
 
 
 def _require_env(name):
@@ -1261,6 +1283,7 @@ def _is_support_admin(uid):
 def _send_admin_alert(text):
     if not BOT_ADMIN_IDS:
         return
+    text = redact_secrets(text)
     for admin_id in BOT_ADMIN_IDS:
         try:
             bot.send_message(admin_id, text[:4000], parse_mode="HTML")
@@ -1716,7 +1739,10 @@ def _check_achievements_in(rec):
     rec["achievements"] = achievements
 
 
-def _record_game_play(user_id, game_key, display_name=None, session_id=None):
+def _record_game_play(user_id, game_key, display_name=None, session_id=None, trusted=True):
+    """trusted=False — партию сообщил клиент Mini App и проверить её нельзя: такие
+    идут в статистику, тыквы и сезон (у них дневные лимиты), но не дают монет,
+    квестов, достижений и не засчитывают приглашённого друга."""
     if not game_key:
         return
     with user_record(user_id) as rec:
@@ -1740,9 +1766,14 @@ def _record_game_play(user_id, game_key, display_name=None, session_id=None):
             "session": str(session_id or ""),
         })
         rec["match_history"] = history[-50:]
-        rec["coins"] = int(rec.get("coins", 0) or 0) + 2
+        if trusted:
+            rec["coins"] = int(rec.get("coins", 0) or 0) + 2
 
     _bump_global_game_stat(game_key)
+    award_pumpkins(user_id, ev.pumpkins_per_play(), "game")
+    award_season_xp(user_id, ev.season_xp_per_play(), "game")
+    if not trusted:
+        return
     _update_matching_quests(user_id, "play_specific_game", game_key=game_key)
     if str(game_key).startswith("room_"):
         _update_matching_quests(user_id, "play_room_game", game_key=game_key)
@@ -1750,19 +1781,17 @@ def _record_game_play(user_id, game_key, display_name=None, session_id=None):
     _update_matching_quests(user_id, "count_games_weekly", game_key=game_key)
     _update_matching_quests(user_id, "count_games_seasonal", game_key=game_key)
     _check_achievements(user_id)
-    award_pumpkins(user_id, ev.pumpkins_per_play(), "game")
-    award_season_xp(user_id, ev.season_xp_per_play(), "game")
     if rec.get("ref_status") == "waiting":
         _referral_track_play(user_id)
     if rec.get("ref_pending"):
         _referral_flush(user_id)
 
-def _record_game_play_once(user_id, game_key, session_id, display_name=None):
+def _record_game_play_once(user_id, game_key, session_id, display_name=None, trusted=True):
     if not game_key:
         return
     sid = str(session_id or "").strip()
     if not sid:
-        _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id)
+        _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id, trusted=trusted)
         return
     uniq = f"{game_key}:{sid}"
     with user_record(user_id) as rec:
@@ -1775,9 +1804,9 @@ def _record_game_play_once(user_id, game_key, session_id, display_name=None):
             rec["tracked_sessions"] = seen[-1000:]
     if duplicate:
         return
-    _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id)
+    _record_game_play(user_id, game_key, display_name=display_name, session_id=session_id, trusted=trusted)
 
-def _record_game_result(user_id, game_key, result, extra=None, reward=True):
+def _record_game_result(user_id, game_key, result, extra=None, reward=True, trusted=True):
     """reward=False — игра на ставку (выплату считает она сама) или итог,
     который сообщил клиент Mini App: монеты за победу им не положены."""
     if result not in ("wins", "losses", "draws"):
@@ -1796,10 +1825,13 @@ def _record_game_result(user_id, game_key, result, extra=None, reward=True):
             replay.update(extra)
         rec["last_replay"] = replay
     if result == "wins":
-        _update_matching_quests(user_id, "count_wins", game_key=game_key)
-        _update_matching_quests(user_id, "win_specific_game", game_key=game_key)
         award_pumpkins(user_id, ev.pumpkins_per_win(), "game")
         award_season_xp(user_id, ev.season_xp_per_win(), "game")
+    if not trusted:
+        return
+    if result == "wins":
+        _update_matching_quests(user_id, "count_wins", game_key=game_key)
+        _update_matching_quests(user_id, "win_specific_game", game_key=game_key)
     _check_achievements(user_id)
 
 
@@ -3277,12 +3309,19 @@ def has_premium(uid):
     user = get_user(uid)
     return float(user.get("premium_until") or 0) > time.time()
 
+AI_PENDING_KEEP = 20
+_ai_start_lock = threading.Lock()
+
+
 def can_use_ai(uid):
     user = get_user(uid)
     if has_premium(uid):
         return True, None
-    cnt = int(user.get("count", 0) or 0)
-    if cnt < FREE_DAILY_QUOTA:
+    cnt = int(user.get("count", 0) or 0) if user.get("date") == date.today().isoformat() else 0
+    # Ответы в работе тоже считаются: иначе 50 кнопок разом прошли бы при лимите 10
+    pending = user.get("pending") if isinstance(user.get("pending"), dict) else {}
+    inflight = sum(1 for req in pending.values() if isinstance(req, dict) and req.get("status") == "process")
+    if cnt + inflight < FREE_DAILY_QUOTA:
         return True, None
     return False, f"⚠️ Лимит {FREE_DAILY_QUOTA} запросов в день. Купите премиум для неограниченного доступа."
 
@@ -4684,20 +4723,38 @@ def _poker_resolve(state):
     state["status"] = "ended"
     return state
 
+POKER_MIN_BET, POKER_MAX_BET = 1, 500
+_poker_lock = threading.Lock()
+
+
+def _poker_bet(raw):
+    """Ставка из команды или кнопки; None — ставка недопустима (минус, ноль, мусор)."""
+    try:
+        bet = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return bet if POKER_MIN_BET <= bet <= POKER_MAX_BET else None
+
+
 def _poker_apply_result(uid, state):
-    if state.get("recorded"):
-        return
-    state["recorded"] = True
-    d = load_data()
-    rec = d.setdefault("users", {}).setdefault(str(uid), {})
-    rec = _ensure_profile_fields(rec)
+    # Ставку списали при раздаче: выигрыш возвращает её вдвое, ничья — как была
+    with _poker_lock:                   # две нажатые разом кнопки не заплатят дважды
+        if state.get("recorded"):
+            return
+        state["recorded"] = True
     bet = int(state.get("bet", 10))
-    coins = int(rec.get("coins", 0) or 0)
     result = state.get("result")
-    if result == "wins":
-        rec["coins"] = coins + bet
-    elif result == "losses":
-        rec["coins"] = max(0, coins - bet)
+    with user_record(uid) as rec:
+        _ensure_profile_fields(rec)
+        coins = int(rec.get("coins", 0) or 0)
+        if result == "wins":
+            rec["coins"] = coins + 2 * bet
+        elif result == "draws":
+            rec["coins"] = coins + bet
+        _poker_save_replay(rec, state, result, bet)
+
+
+def _poker_save_replay(rec, state, result, bet):
     rec["last_replay"] = {
         "game": "poker",
         "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -4709,8 +4766,6 @@ def _poker_apply_result(uid, state):
         "player_combo": _poker_hand_name(_poker_best_hand(state["player"] + state["community"])),
         "bot_combo": _poker_hand_name(_poker_best_hand(state["bot"] + state["community"])),
     }
-    d["users"][str(uid)] = rec
-    save_data(d)
 
 
 @bot.message_handler(commands=["poker"])
@@ -4720,9 +4775,8 @@ def poker_cmd(message):
         return
     parts = message.text.split()
     bet = max(1, min(500, int(parts[1]))) if len(parts) >= 2 and parts[1].isdigit() else 10
-    rec, _ = _load_profile(uid)
-    coins = int(rec.get("coins", 0) or 0)
-    if coins < bet:
+    taken, coins = _chat_take_bet(uid, bet)
+    if not taken:
         bot.send_message(message.chat.id, f"❌ Недостаточно монет. У вас {coins}🪙, нужно {bet}🪙.")
         return
     gid = short_id()
@@ -4742,11 +4796,15 @@ def poker_callback(call):
         action = parts[1]
 
         if action == "new" and len(parts) >= 4:
-            bet = int(parts[2])
+            bet = _poker_bet(parts[2])
             gid = parts[3]
-            rec, _ = _load_profile(uid)
-            if int(rec.get("coins", 0) or 0) < bet:
-                bot.answer_callback_query(call.id, f"Недостаточно монет ({int(rec.get('coins',0))}🪙).")
+            old = poker_games.get(gid)
+            if bet is None or (old and old.get("uid") not in (None, uid)) or (old and old.get("status") == "playing"):
+                bot.answer_callback_query(call.id)
+                return
+            taken, coins = _chat_take_bet(uid, bet)
+            if not taken:
+                bot.answer_callback_query(call.id, f"Недостаточно монет ({coins}🪙).")
                 return
             chat_id = call.message.chat.id if call.message else None
             state = _poker_new_game(uid, chat_id, bet)
@@ -6054,13 +6112,14 @@ def topusers_cmd(message):
 
     rows.sort(key=lambda x: (-x[0], x[1].lower()))
     top = rows[:15]
-    text = "🏆 *Топ пользователей по серии*\n"
-    text += "_Серия считается по дням активности в боте._\n\n"
+    # Имена — это first_name игроков: в Markdown из «[Поддержка](https://…)» вышла бы ссылка
+    text = "🏆 <b>Топ пользователей по серии</b>\n"
+    text += "<i>Серия считается по дням активности в боте.</i>\n\n"
     for i, (streak, name, last_day) in enumerate(top, 1):
         status = "✅ сегодня" if last_day == today else "⌛ вчера"
-        text += f"{i}. {name} — {streak} дн. ({status})\n"
+        text += f"{i}. {html.escape(str(name))} — {streak} дн. ({status})\n"
 
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 @bot.message_handler(commands=["profile"])
 def profile_cmd(message):
@@ -8462,8 +8521,9 @@ def room_register_cmd(message):
     if message.chat.type not in ("group", "supergroup"):
         bot.send_message(message.chat.id, "Команду /party_register можно использовать только в группе.")
         return
-    if not _is_group_admin(message.chat.id, message.from_user.id):
-        bot.send_message(message.chat.id, "⛔ Только администратор может зарегистрировать пати.")
+    # Группа из пула принимает чужие пати — её владелец видел бы игроков и их сообщения
+    if not _is_bot_admin(message.from_user.id) or not _is_group_admin(message.chat.id, message.from_user.id):
+        bot.send_message(message.chat.id, "⛔ Добавить группу в пул пати может только администратор бота.")
         return
     d, rooms = _rooms_get_data()
     pool = rooms.get("pool", [])
@@ -8778,10 +8838,18 @@ def reaction_hit_callback(call):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("reaction_begin_"))
 def reaction_begin_callback(call):
+    if _deny_if_spam(call.from_user.id, call_id=call.id, action="reaction"):
+        return
     try:
         gid = call.data.split("_", 2)[2]
         state = reaction_games.get(gid)
+        if state and state.get("starting"):
+            bot.answer_callback_query(call.id)
+            return
         if not state:
+            if len(gid) > 32:
+                bot.answer_callback_query(call.id)
+                return
             state = {"uid": call.from_user.id, "chat_id": None, "started": False, "start_at": None, "msg_id": None, "inline_id": None}
         if call.from_user.id != state.get("uid"):
             bot.answer_callback_query(call.id, "Это не ваша игра.")
@@ -8789,6 +8857,7 @@ def reaction_begin_callback(call):
         state["inline_id"] = call.inline_message_id
         state["started"] = False
         state["start_at"] = None
+        state["starting"] = True
         reaction_games[gid] = state
         _reaction_edit(state, "⚡ Блиц-реакция\nЖдите сигнала и нажмите кнопку!", reply_markup=_reaction_keyboard(gid))
 
@@ -8797,6 +8866,7 @@ def reaction_begin_callback(call):
             if gid not in reaction_games:
                 return
             st = reaction_games[gid]
+            st.pop("starting", None)
             st["started"] = True
             st["start_at"] = time.time()
             reaction_games[gid] = st
@@ -8822,6 +8892,12 @@ def room_continue_callback(call):
         room = rooms.get("active", {}).get(code)
         if not isinstance(room, dict):
             bot.answer_callback_query(call.id, "Пати не найден.")
+            return
+        uid = call.from_user.id
+        in_room = call.message is not None and call.message.chat.id == room.get("chat_id")
+        member = uid in (room.get("participants") or []) or _is_bot_admin(uid)
+        if not in_room or not member:
+            bot.answer_callback_query(call.id, "Решают участники этого пати.", show_alert=True)
             return
         if action == "yes":
             room["game"] = None
@@ -8926,9 +9002,10 @@ def _bj_send_table(chat_id):
 def _bj_settle(user, gid, table):
     """Раздача кончилась: выплата и запись партии — один раз."""
     hand = table["hand"]
-    if hand["status"] == "playing" or table.get("settled"):
-        return
-    table["settled"] = True
+    with _chat_casino_lock:         # два «Хватит» разом не заплатят дважды
+        if hand["status"] == "playing" or table.get("settled"):
+            return
+        table["settled"] = True
     payout = casino.payout(table["bet"], hand["result"])
     if payout:
         _chat_pay(user.id, payout)
@@ -9123,7 +9200,12 @@ def ai_inline(query):
 
     req_id = uuid.uuid4().hex
     data = load_data()
-    data["users"][str(uid)]["pending"][req_id] = {"q": text, "a": None, "status": "wait"}
+    pending = data["users"][str(uid)]["pending"]
+    pending[req_id] = {"q": text, "a": None, "status": "wait"}
+    # Инлайн-запрос приходит на каждую набранную букву — храним только последние
+    for stale in list(pending)[:-AI_PENDING_KEEP]:
+        if pending[stale].get("status") != "process":
+            pending.pop(stale, None)
     save_data(data)
 
     result = types.InlineQueryResultArticle(
@@ -10034,13 +10116,14 @@ def ai_callback(call):
             return
 
         if status == "wait":
-            allow, err = can_use_ai(uid)
-            if not allow:
-                bot.answer_callback_query(call.id, err, show_alert=True)
-                return
-            req["status"] = "process"
-            req["started_at"] = int(time.time())
-            save_data(data)
+            with _ai_start_lock:
+                allow, err = can_use_ai(uid)
+                if not allow:
+                    bot.answer_callback_query(call.id, err, show_alert=True)
+                    return
+                req["status"] = "process"
+                req["started_at"] = int(time.time())
+                save_data(data)
 
             def work():
                 try:
@@ -10240,6 +10323,9 @@ def ttt_restart(call):
         game = inline_ttt_games.get(gid)
         if not game:
             bot.answer_callback_query(call.id, "Игра не найдена.")
+            return
+        if call.from_user.id not in game.get("players", ()):
+            bot.answer_callback_query(call.id, "Новую партию начинают игроки.")
             return
         # Первым ходит тот, кто в прошлой партии ходил вторым.
         p1, p2 = game["players"]
@@ -13299,10 +13385,25 @@ def telos_callbacks(call):
         log_exception("telos_callback", e)
         bot.answer_callback_query(call.id, "Ошибка")
 
+_easter_running = set()
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "easter_egg")
 def easter_inline(call):
+    # Одна анимация на сообщение и не чаще раза в секунду: каждая — это поток и десятки правок
+    inline_id = call.inline_message_id
+    if not inline_id or inline_id in _easter_running or _deny_if_spam(call.from_user.id, call_id=call.id, action="easter"):
+        bot.answer_callback_query(call.id)
+        return
     bot.answer_callback_query(call.id, "Пасхалка!")
-    Thread(target=play_inline_easter_egg, args=(call.inline_message_id,)).start()
+    _easter_running.add(inline_id)
+
+    def run():
+        try:
+            play_inline_easter_egg(inline_id)
+        finally:
+            _easter_running.discard(inline_id)
+    Thread(target=run, daemon=True).start()
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sysopen_"))
 def sys_open(call):
@@ -13420,6 +13521,9 @@ def coin_flip_legacy(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cbet_"))
 def coin_bet_callback(call):
     user = call.from_user
+    # Анимация броска держит рабочий поток ~1,5 с: частые нажатия встали бы в очередь всем
+    if _deny_if_spam(user.id, call_id=call.id, action="luck"):
+        return
     try:
         _, side_code, raw_bet = call.data.split("_")
         side = COIN_SIDES.get(side_code)
@@ -13486,6 +13590,8 @@ def slot_spin_legacy(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sbet_"))
 def slot_bet_callback(call):
     user = call.from_user
+    if _deny_if_spam(user.id, call_id=call.id, action="luck"):
+        return
     try:
         bet = _parse_bet(call.data.split("_", 1)[1])
         if bet is None:
@@ -14437,7 +14543,7 @@ def _webapp_apply_result(user_id, tg_user, payload):
 
     display_name = (tg_user or {}).get("first_name") or str(user_id)
     session_id = str(payload.get("session") or short_id())[:64]
-    _record_game_play_once(user_id, game_key, f"webapp_{session_id}", display_name=display_name)
+    _record_game_play_once(user_id, game_key, f"webapp_{session_id}", display_name=display_name, trusted=False)
 
     result = payload.get("result")
     if result in ("wins", "losses", "draws"):
@@ -14446,7 +14552,7 @@ def _webapp_apply_result(user_id, tg_user, payload):
             if payload.get(key) is not None:
                 extra[key] = str(payload[key])[:64]
 
-        _record_game_result(user_id, game_key, result, extra=extra or None, reward=False)
+        _record_game_result(user_id, game_key, result, extra=extra or None, reward=False, trusted=False)
 
     new_record = game_key in WEBAPP_RECORD_GAMES and _save_record(user_id, game_key, payload.get("score"))
     update_user_streak(user_id, display_name)
