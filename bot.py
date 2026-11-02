@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from threading import Thread
 import html
 import json
+import inspect
 import threading
 from datetime import datetime, date, timedelta
 import os
@@ -42,6 +43,7 @@ from core.db import (
     user_exists,
 )
 from core import business as biz_core
+from core import i18n as i18n_core
 from core import casino
 from core import events as ev
 from room_games import (
@@ -520,6 +522,18 @@ _lang_cache = {}
 _lang_cache_lock = threading.Lock()
 
 
+# Язык из настроек Telegram — для тех, кто не выбирал язык в боте сам
+_telegram_lang_codes = {}
+_RU_SPEAKING = ("ru", "be", "kk", "ky", "uz", "tg", "hy", "az", "ka", "tk")
+
+
+def _language_from_telegram(user_id):
+    code = (_telegram_lang_codes.get(str(user_id)) or "").lower()[:2]
+    if not code or code in _RU_SPEAKING:
+        return "ru"
+    return "uk" if code == "uk" else "en"
+
+
 def get_user_language(user_id):
     key = str(user_id)
     now = time.monotonic()
@@ -528,7 +542,7 @@ def get_user_language(user_id):
         if cached and now - cached[1] < LANG_CACHE_TTL:
             return cached[0]
 
-    lang = load_user_record(key).get("language", "ru")
+    lang = load_user_record(key).get("language") or _language_from_telegram(key)
     with _lang_cache_lock:
         _lang_cache[key] = (lang, now)
     return lang
@@ -14469,6 +14483,7 @@ def _webapp_profile(user_id, tg_user=None):
         "records": _records_of(rec),
         "maintenance": _maintenance_public(user_id),
         "subscription": _webapp_subscription(user_id),
+        "lang": _i18n_lang(user_id),
         "season": {
             "active": season_active(),
             "level": level, "into": into, "per": per, "max": ev.SEASON_MAX_LEVEL,
@@ -14870,6 +14885,17 @@ webapp_server = create_webapp(
         "idea": _webapp_idea,
     }.items()},
 )
+
+
+@webapp_server.route("/api/i18n")
+def webapp_i18n():
+    from flask import jsonify, request as flask_request
+    lang = flask_request.args.get("lang", "")
+    if lang not in i18n_core.LANGS:
+        return jsonify({})
+    response = jsonify(I18N.all(lang))
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 
 
 @webapp_server.route("/status")
@@ -15534,6 +15560,149 @@ def _graceful_shutdown(signum, _frame):
         bot.stop_polling()
     except Exception:
         LOGGER.exception("stop_polling failed during shutdown")
+
+
+# ---------------------------------------------------------------------------
+# Переводы. Тексты в коде русские; всё, что уходит пользователю, — сообщения,
+# подписи, кнопки, всплывающие ответы и инлайн-результаты — переводится здесь
+# по каталогу i18n/<язык>.json (см. core/i18n.py). Язык получателя: личный
+# чат — язык этого человека, группа и инлайн — язык того, кто нажал или
+# написал. Язык, который человек не выбирал сам, берём из его Telegram.
+# ---------------------------------------------------------------------------
+I18N = i18n_core.load(Path(__file__).resolve().parent / "i18n")
+_I18N_KEYS = ("text", "title", "description", "message_text", "caption")
+_i18n_ctx = threading.local()
+
+
+def _i18n_lang(user_id):
+    if not user_id:
+        return "ru"
+    lang = get_user_language(user_id)
+    return "uk" if lang == "ua" else lang
+
+
+def _i18n_target(bound):
+    chat_id = bound.get("chat_id")
+    connection = bound.get("business_connection_id")
+    if connection:
+        conn = _biz["connections"].get(connection) or {}
+        return _i18n_lang(conn.get("owner"))
+    if isinstance(chat_id, int) and chat_id > 0:
+        return _i18n_lang(chat_id)
+    return _i18n_lang(getattr(_i18n_ctx, "user", None))
+
+
+def _i18n_deep(obj, lang):
+    if isinstance(obj, dict):
+        return {k: (I18N.text(v, lang) if k in _I18N_KEYS and isinstance(v, str) else _i18n_deep(v, lang))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_i18n_deep(v, lang) for v in obj]
+    return obj
+
+
+class _I18nJson(types.JsonSerializable):
+    """Переведённая копия разметки или инлайн-результата: оригинал не трогаем —
+    одну и ту же клавиатуру могут отправлять людям с разными языками."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def to_json(self):
+        return json.dumps(self.data, ensure_ascii=False)
+
+    def to_dict(self):
+        return self.data
+
+
+def _i18n_object(obj, lang):
+    if obj is None or not hasattr(obj, "to_json"):
+        return obj
+    try:
+        return _I18nJson(_i18n_deep(json.loads(obj.to_json()), lang))
+    except Exception:
+        return obj
+
+
+def _i18n_wrap(name):
+    original = getattr(bot, name)
+    # Подпись берём у TeleBot: обёртки выше (эмодзи, победы) принимают *args/**kwargs
+    signature = inspect.signature(getattr(telebot.TeleBot, name))
+
+    @functools.wraps(original)
+    def wrapper(*args, **kwargs):
+        try:
+            bound = signature.bind_partial(bot, *args, **kwargs)
+        except TypeError:
+            return original(*args, **kwargs)
+        values = bound.arguments
+        lang = (_i18n_lang(getattr(_i18n_ctx, "user", None))
+                if name in ("answer_callback_query", "answer_inline_query") else _i18n_target(values))
+        if lang != "ru":
+            for key in ("text", "caption"):
+                if isinstance(values.get(key), str):
+                    values[key] = I18N.text(values[key], lang)
+            if values.get("reply_markup") is not None:
+                values["reply_markup"] = _i18n_object(values["reply_markup"], lang)
+            if values.get("results"):
+                values["results"] = [_i18n_object(r, lang) for r in values["results"]]
+        return original(*bound.args[1:], **bound.kwargs)
+    setattr(bot, name, wrapper)
+
+
+for _name in ("send_message", "edit_message_text", "answer_callback_query", "answer_inline_query",
+              "send_photo", "send_animation", "send_document", "send_video", "edit_message_caption",
+              "edit_message_reply_markup", "send_dice", "send_poll"):
+    _i18n_wrap(_name)
+
+
+def _i18n_remember(obj):
+    user = getattr(obj, "from_user", None)
+    if user is None:
+        return None
+    code = getattr(user, "language_code", None)
+    if code:
+        _telegram_lang_codes[str(user.id)] = code
+    return user.id
+
+
+_i18n_exec_task = bot._exec_task
+
+
+def _exec_task_with_language(task, *args, **kwargs):
+    user_id = _i18n_remember(args[0]) if args else None
+
+    def run(*task_args, **task_kwargs):
+        _i18n_ctx.user = user_id
+        try:
+            return task(*task_args, **task_kwargs)
+        finally:
+            _i18n_ctx.user = None
+    return _i18n_exec_task(run, *args, **kwargs)
+
+
+bot._exec_task = _exec_task_with_language
+
+_i18n_process_updates = bot.process_new_updates
+
+
+def _process_updates_with_language(updates):
+    # Язык из Telegram запоминаем до фильтров обработчиков: они уже зовут localized_text
+    for update in updates:
+        for kind in ("message", "callback_query", "inline_query", "chosen_inline_result", "business_message"):
+            obj = getattr(update, kind, None)
+            if obj is not None:
+                uid = _i18n_remember(obj)
+                if uid and str(uid) in _telegram_lang_codes:
+                    with _lang_cache_lock:
+                        cached = _lang_cache.get(str(uid))
+                    if cached and cached[0] == "ru" and _language_from_telegram(uid) != "ru":
+                        with _lang_cache_lock:
+                            _lang_cache.pop(str(uid), None)
+    return _i18n_process_updates(updates)
+
+
+bot.process_new_updates = _process_updates_with_language
 
 
 if __name__ == "__main__":

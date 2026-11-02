@@ -19,6 +19,136 @@ let inGame = false;
 let maintenanceShown = false;
 let subscribeShown = false;
 
+/* ---------- переводы ---------- */
+
+// Тексты приложения написаны по-русски. Для остальных языков переводим то,
+// что видно на экране: каждый текстовый узел ищем в каталоге с сервера
+// (/api/i18n — тот же каталог, что у бота). Оригинал храним в узле, чтобы
+// перевести заново, если язык сменится.
+const I18N = { lang: 'ru', exact: null, buckets: null };
+const CYR = /[А-Яа-яЁё]/;
+const RU_SPEAKING = ['ru', 'be', 'kk', 'ky', 'uz', 'tg', 'hy', 'az', 'ka', 'tk'];
+const I18N_ATTRS = ['placeholder', 'title', 'aria-label'];
+
+function guessLang() {
+  const user = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+  const code = ((user && user.language_code) || '').slice(0, 2).toLowerCase();
+  if (!code || RU_SPEAKING.includes(code)) return 'ru';
+  return code === 'uk' ? 'uk' : 'en';
+}
+
+function unbrace(text) { return text.replace(/\{\{/g, '{').replace(/\}\}/g, '}'); }
+
+function buildCatalog(data) {
+  const exact = new Map();
+  const buckets = new Map();
+  Object.entries(data).forEach(([source, target]) => {
+    if (!/\{\d+\}/.test(source.replace(/\{\{|\}\}/g, ''))) {
+      exact.set(unbrace(source), unbrace(target));
+      return;
+    }
+    const parts = source.split(/(?<!\{)\{(\d+)\}(?!\})/);
+    const literals = parts.filter((_, i) => i % 2 === 0).map(unbrace);
+    const order = parts.filter((_, i) => i % 2 === 1).map(Number);
+    const pattern = literals.map((lit, i) => lit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + (i < order.length ? '(.+?)' : '')).join('');
+    const key = literals[0].length >= 3 ? literals[0].slice(0, 3) : '';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push({ re: new RegExp('^' + pattern + '$', 's'), order, target, weight: literals.join('').length });
+  });
+  buckets.forEach(list => list.sort((a, b) => b.weight - a.weight));
+  return { exact, buckets };
+}
+
+function trLine(text, depth) {
+  if (!I18N.exact || !CYR.test(text)) return text;
+  const hit = I18N.exact.get(text);
+  if (hit !== undefined) return hit;
+  const list = (I18N.buckets.get(text.slice(0, 3)) || []).concat(I18N.buckets.get('') || []);
+  for (const entry of list) {
+    const m = entry.re.exec(text);
+    if (!m) continue;
+    const args = [];
+    entry.order.forEach((index, i) => { args[index] = depth ? m[i + 1] : trLine(m[i + 1], 1); });
+    return unbrace(entry.target.replace(/(?<!\{)\{(\d+)\}(?!\})/g, (_, i) => (args[i] !== undefined ? args[i] : '')));
+  }
+  return text;
+}
+
+function trText(text) {
+  if (I18N.lang === 'ru' || !text || !CYR.test(text)) return text;
+  return text.split('\n').map(line => {
+    const core = line.trim();
+    if (!core) return line;
+    const start = line.indexOf(core);
+    return line.slice(0, start) + trLine(core, 0) + line.slice(start + core.length);
+  }).join('\n');
+}
+
+/** Переводит текстовый узел; повторный вызов на нашем же переводе ничего не делает. */
+function trNode(node) {
+  const current = node.nodeValue;
+  if (node.__tr === current) return;
+  if (node.__tr === undefined || current !== node.__tr) node.__ru = current;
+  const out = trText(node.__ru);
+  node.__tr = out;
+  if (out !== current) node.nodeValue = out;
+}
+
+function trElementAttrs(element) {
+  I18N_ATTRS.forEach(attr => {
+    const value = element.getAttribute && element.getAttribute(attr);
+    if (!value || !CYR.test(value) && !element['__ru_' + attr]) return;
+    const key = '__ru_' + attr;
+    if (element['__tr_' + attr] !== value) element[key] = value;
+    const out = trText(element[key]);
+    element['__tr_' + attr] = out;
+    if (out !== value) element.setAttribute(attr, out);
+  });
+}
+
+function trTree(root) {
+  if (root.nodeType === Node.TEXT_NODE) { trNode(root); return; }
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+  trElementAttrs(root);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === Node.TEXT_NODE) trNode(node);
+    else trElementAttrs(node);
+  }
+}
+
+let i18nObserver = null;
+
+async function loadLang(lang) {
+  if (lang === I18N.lang) return;
+  if (lang === 'ru') {
+    I18N.lang = 'ru';
+  } else {
+    try {
+      const data = await (await fetch('/api/i18n?lang=' + encodeURIComponent(lang))).json();
+      Object.assign(I18N, buildCatalog(data), { lang });
+    } catch (e) {
+      return;                       // без каталога остаёмся на русском
+    }
+  }
+  document.documentElement.lang = I18N.lang;
+  trTree(document.body);
+  document.title = trText(document.title);
+  if (!i18nObserver) {
+    i18nObserver = new MutationObserver(records => {
+      if (I18N.lang === 'ru') return;
+      records.forEach(r => {
+        if (r.type === 'characterData') trNode(r.target);
+        else if (r.type === 'attributes') trElementAttrs(r.target);
+        else r.addedNodes.forEach(trTree);
+      });
+    });
+    i18nObserver.observe(document.body, { childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: I18N_ATTRS });
+  }
+}
+
 /* ---------- режим отображения ---------- */
 
 const MOBILE_PLATFORMS = ['android', 'android_x', 'ios'];
@@ -186,6 +316,7 @@ function setCoins(profile) {
   const previous = PROFILE ? PROFILE.coins : null;
   const skinChanged = !PROFILE || PROFILE.theme !== profile.theme;
   PROFILE = profile;
+  if (profile.lang && profile.lang !== I18N.lang) loadLang(profile.lang);
   if (skinChanged) applyLook();
   updatePumpkins();
   syncSubscription(false);
@@ -2596,6 +2727,7 @@ async function boot() {
       try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) { /* старый клиент */ }
     }
 
+    await loadLang(guessLang());
     CFG = await (await fetch('/api/config')).json();
     try {
       setCoins(await api('/api/profile', {}));

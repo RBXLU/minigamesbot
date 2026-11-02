@@ -63,7 +63,7 @@ def create_app(bot_token, dataset_provider, profile_provider, result_handler, al
     @app.after_request
     def _headers(response):
         response.headers["X-Frame-Options"] = "ALLOWALL"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.route("/")
