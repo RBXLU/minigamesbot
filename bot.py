@@ -74,7 +74,7 @@ LOGS_DIR = Path("logs")
 LOGS_ARCHIVE_DIR = LOGS_DIR / "archive"
 LATEST_LOG = LOGS_DIR / "latest.log"
 ERRORS_LOG = LOGS_DIR / "errors.log"
-KEEP_LOG_ARCHIVES = int(os.getenv("KEEP_LOG_ARCHIVES", 20))
+KEEP_LOG_ARCHIVES = int(os.getenv("KEEP_LOG_ARCHIVES") or 20)
 _shutdown_event = threading.Event()
 
 
@@ -542,7 +542,7 @@ def _current_release():
 
 # Каждый localized_text() читал состояние целиком, а инлайн-ответ переводит десятки
 # строк — на один запрос набегали секунды до обращения к Telegram.
-LANG_CACHE_TTL = float(os.getenv("LANG_CACHE_TTL", "30"))
+LANG_CACHE_TTL = float(os.getenv("LANG_CACHE_TTL") or "30")
 _lang_cache = {}
 _lang_cache_lock = threading.Lock()
 
@@ -617,7 +617,7 @@ def get_game_description(user_id, game_key):
 TOKEN = _require_env("TELEGRAM_TOKEN")
 # Два воркера по умолчанию: одна долгая операция (ИИ, анимация) — и все
 # остальные нажатия ждут в очереди.
-bot = telebot.TeleBot(TOKEN, num_threads=max(2, int(os.getenv("BOT_WORKER_THREADS", "4"))))
+bot = telebot.TeleBot(TOKEN, num_threads=max(2, int(os.getenv("BOT_WORKER_THREADS") or "4")))
 try:
     INLINE_BOT_USERNAME = bot.get_me().username or "minigamesisbot"
     bot.delete_webhook()
@@ -731,7 +731,7 @@ NEWS_EMOJI_ENABLED = os.getenv("NEWS_EMOJI_ENABLED", "1") != "0"
 _news_emoji_active = NEWS_EMOJI_ENABLED
 
 # У Telegram есть предел на число entity в сообщении, а игровые поля содержат десятки эмодзи.
-NEWS_EMOJI_MAX_PER_MESSAGE = int(os.getenv("NEWS_EMOJI_MAX_PER_MESSAGE", "50"))
+NEWS_EMOJI_MAX_PER_MESSAGE = int(os.getenv("NEWS_EMOJI_MAX_PER_MESSAGE") or "50")
 
 # Внутри <tg-emoji> Telegram требует ровно один эмодзи, а не ссылку, поэтому для ключей
 # tg://emoji?id=... подбираем эмодзи с тем же emoji-id; если такого нет — ссылку убираем.
@@ -943,7 +943,7 @@ def _is_custom_emoji_rejection(exc):
 
 # Одно неудачное сообщение уходит обычным текстом, подстановка остаётся. Гасим её
 # целиком только при череде отказов подряд — это уже системная проблема.
-NEWS_EMOJI_FAILURE_STREAK = int(os.getenv("NEWS_EMOJI_FAILURE_STREAK", "10"))
+NEWS_EMOJI_FAILURE_STREAK = int(os.getenv("NEWS_EMOJI_FAILURE_STREAK") or "10")
 _news_emoji_failures = 0
 _news_emoji_lock = threading.Lock()
 
@@ -1075,7 +1075,7 @@ bot.answer_inline_query = answer_inline_query_with_news_emoji
 # +10 🪙». Эмодзи — купленный в магазине эффект победы. Так награда видна во
 # всех чат-играх, а не только в тех, где её не забыли нарисовать.
 # ---------------------------------------------------------------------------
-COINS_PER_WIN = int(os.getenv("COINS_PER_WIN", "10"))
+COINS_PER_WIN = int(os.getenv("COINS_PER_WIN") or "10")
 # Поздравление старше этого не дописываем: значит, партия ничего не перерисовала
 VICTORY_NOTE_TTL = 5.0
 # Эффект «🎉» для новых сообщений в личке (Telegram умеет только там)
@@ -1208,7 +1208,7 @@ bot._exec_task = _exec_task_with_fresh_notes
 NVMAPI_KEY = os.getenv("NVMAPI_KEY", "").strip()
 NVMAPI_BASE_URL = os.getenv("NVMAPI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
 NVMAPI_MODEL = os.getenv("NVMAPI_MODEL", "meta/llama-3.1-8b-instruct").strip()
-NVMAPI_TIMEOUT = float(os.getenv("NVMAPI_TIMEOUT", "30"))
+NVMAPI_TIMEOUT = float(os.getenv("NVMAPI_TIMEOUT") or "30")
 _nvmapi_client = None
 _nvmapi_client_lock = threading.Lock()
 
@@ -1225,14 +1225,14 @@ def get_nvmapi_client():
             _nvmapi_client = OpenAI(api_key=NVMAPI_KEY, base_url=NVMAPI_BASE_URL, timeout=NVMAPI_TIMEOUT)
     return _nvmapi_client
 
-FREE_DAILY_QUOTA = int(os.getenv("FREE_DAILY_QUOTA", 10))
+FREE_DAILY_QUOTA = int(os.getenv("FREE_DAILY_QUOTA") or 10)
 
 DATA_FILE = "bot_data.json"
 DB_FILE = os.getenv("BOT_DB_PATH", "bot_data.sqlite3")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@minigamesbottgk")
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://free-bots.heavencloud.in:3328").rstrip("/")
-WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 3328))
+WEBAPP_PORT = int(os.getenv("WEBAPP_PORT") or 3328)
 WEBAPP_SSL_CERT = os.getenv("WEBAPP_SSL_CERT", "").strip()
 WEBAPP_SSL_KEY = os.getenv("WEBAPP_SSL_KEY", "").strip()
 # Открыть Mini App в обычном браузере (без подписи Telegram) — только для отладки
@@ -1346,8 +1346,8 @@ threading.excepthook = _threading_excepthook
 sys.excepthook = _sys_excepthook
 
 BACKUP_FOLDER = os.getenv("BACKUP_FOLDER", "backups")
-BACKUP_INTERVAL_HOURS = int(os.getenv("BACKUP_INTERVAL_HOURS", 24))
-KEEP_BACKUPS_DAYS = int(os.getenv("KEEP_BACKUPS_DAYS", 30))
+BACKUP_INTERVAL_HOURS = int(os.getenv("BACKUP_INTERVAL_HOURS") or 24)
+KEEP_BACKUPS_DAYS = int(os.getenv("KEEP_BACKUPS_DAYS") or 30)
 JSON_FILES_TO_BACKUP = ["bot_data.json", "quests.json", "lang.json"]
 
 
@@ -1366,8 +1366,8 @@ ROOM_TTL_SECONDS = 3600
 ROOM_CODE_LEN = 5
 ROOM_VOTE_SECONDS = 60
 ROOM_MESSAGE_BUFFER = 0
-USER_COOLDOWN_SECONDS = float(os.getenv("USER_COOLDOWN_SECONDS", "0.8"))
-ROOM_IDLE_TIMEOUT_SECONDS = int(os.getenv("ROOM_IDLE_TIMEOUT_SECONDS", "900"))
+USER_COOLDOWN_SECONDS = float(os.getenv("USER_COOLDOWN_SECONDS") or "0.8")
+ROOM_IDLE_TIMEOUT_SECONDS = int(os.getenv("ROOM_IDLE_TIMEOUT_SECONDS") or "900")
 _user_cooldowns = {}
 
 def load_data():
@@ -2417,11 +2417,11 @@ def _gift_text():
 # накручивают пачкой свежих аккаунтов. Лимит в день ограничивает накрутку и
 # при выполненном условии активности; сверх лимита друзья ждут в очереди.
 # ---------------------------------------------------------------------------
-REFERRAL_REWARD = int(os.getenv("REFERRAL_REWARD", "100"))
-REFERRAL_WELCOME_BONUS = int(os.getenv("REFERRAL_WELCOME_BONUS", "50"))
-REFERRAL_MIN_GAMES = int(os.getenv("REFERRAL_MIN_GAMES", "3"))
-REFERRAL_MIN_DAYS = int(os.getenv("REFERRAL_MIN_DAYS", "2"))
-REFERRAL_DAILY_LIMIT = int(os.getenv("REFERRAL_DAILY_LIMIT", "10"))
+REFERRAL_REWARD = int(os.getenv("REFERRAL_REWARD") or "100")
+REFERRAL_WELCOME_BONUS = int(os.getenv("REFERRAL_WELCOME_BONUS") or "50")
+REFERRAL_MIN_GAMES = int(os.getenv("REFERRAL_MIN_GAMES") or "3")
+REFERRAL_MIN_DAYS = int(os.getenv("REFERRAL_MIN_DAYS") or "2")
+REFERRAL_DAILY_LIMIT = int(os.getenv("REFERRAL_DAILY_LIMIT") or "10")
 REFERRAL_MILESTONES = ((5, 500), (10, 1000), (20, 3000))
 REFERRAL_PREFIX = "ref_"
 
@@ -3673,7 +3673,7 @@ def _channel_url():
 
 # Кэшируем только подтверждённую подписку: отказ перепроверяем всегда, иначе
 # только что подписавшийся ждал бы истечения кэша.
-SUBSCRIPTION_CACHE_TTL = float(os.getenv("SUBSCRIPTION_CACHE_TTL", "60"))
+SUBSCRIPTION_CACHE_TTL = float(os.getenv("SUBSCRIPTION_CACHE_TTL") or "60")
 _subscription_cache = {}
 _subscription_lock = threading.Lock()
 
@@ -3758,7 +3758,7 @@ def inline_subscription_prompt(query):
 # обработчиков (в том числе бизнес-триггеров «казино», «тетрис»): иначе
 # название «Тетрис 2» ушло бы запускать тетрис.
 # ---------------------------------------------------------------------------
-IDEA_DAILY_LIMIT = int(os.getenv("IDEA_DAILY_LIMIT", "3"))
+IDEA_DAILY_LIMIT = int(os.getenv("IDEA_DAILY_LIMIT") or "3")
 IDEA_KEEP = 500
 IDEA_LIMITS = {"title": (3, 80), "description": (20, 3000), "sketches": 5, "text": 1000,
                "rows": 5, "per_row": 4, "button": 32}
@@ -4229,13 +4229,13 @@ questions = [
 # один. Остальные никто не удалит — за сутки это съедало сотни мегабайт. Держим
 # ограниченное число, вытесняя те, к которым дольше всего не обращались: активная
 # партия остаётся, пока в неё играют.
-GAME_SESSIONS_LIMIT = int(os.getenv("GAME_SESSIONS_LIMIT", "400"))
+GAME_SESSIONS_LIMIT = int(os.getenv("GAME_SESSIONS_LIMIT") or "400")
 # Сколько живёт партия, в которую ещё не заходили. Сессия рождается в момент
 # инлайн-запроса, а кнопку жмут позже: клиент Telegram показывает выдачу из
 # своего кэша, сообщение с игрой ждёт в чате друга. Пять минут здесь ломали
 # кнопки — память и так ограничена GAME_SESSIONS_LIMIT.
 GAME_PREVIEW_TTL = int(os.getenv("GAME_PREVIEW_TTL", str(6 * 3600)))
-GAME_JOIN_TIMEOUT = int(os.getenv("GAME_JOIN_TIMEOUT", "300"))
+GAME_JOIN_TIMEOUT = int(os.getenv("GAME_JOIN_TIMEOUT") or "300")
 _GAME_STORES = []
 
 
@@ -7720,7 +7720,7 @@ def _admin_maintenance_confirm_kb():
 # Рассылка всем пользователям. Telegram пускает около 30 сообщений в секунду
 # на бота и при превышении отвечает 429 с retry_after; заблокировавшие бота
 # отвечают 403 — их помечаем, чтобы следующая рассылка на них не тратилась.
-BROADCAST_RATE = float(os.getenv("BROADCAST_RATE", "25"))
+BROADCAST_RATE = float(os.getenv("BROADCAST_RATE") or "25")
 _broadcast_lock = threading.Lock()
 
 
@@ -11798,7 +11798,7 @@ def start_minesweeper_in_chat(chat_id):
 
 
 WORDGAME_ALPHABET = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
-WORDGAME_TARGET = int(os.getenv("WORDGAME_TARGET", "5"))
+WORDGAME_TARGET = int(os.getenv("WORDGAME_TARGET") or "5")
 WORDGAME_MIN_LEN = 3
 #: На эти буквы слова не начинаются — берём предыдущую подходящую.
 WORDGAME_SKIP_TAIL = "ьъы"
@@ -14804,8 +14804,8 @@ def _remember_display_name(user_id, tg_user):
 # Итог партии в Mini App сообщает сам клиент, а подписанный initData игрок
 # может взять из своего же приложения и слать запросы скриптом. Пока игры не
 # считаются на сервере, ограничиваем, сколько можно так «наиграть».
-WEBAPP_MIN_REPORT_INTERVAL = float(os.getenv("WEBAPP_MIN_REPORT_INTERVAL", "3"))
-WEBAPP_DAILY_REPORTS = int(os.getenv("WEBAPP_DAILY_REPORTS", "150"))
+WEBAPP_MIN_REPORT_INTERVAL = float(os.getenv("WEBAPP_MIN_REPORT_INTERVAL") or "3")
+WEBAPP_DAILY_REPORTS = int(os.getenv("WEBAPP_DAILY_REPORTS") or "150")
 _webapp_last_report = {}
 
 
@@ -14970,7 +14970,7 @@ def _card_table_view(table):
 WEBAPP_ADMIN_IDS = _parse_int_id_set(os.getenv("WEBAPP_ADMIN_IDS", "5782683757"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_PORT = int(os.getenv("SMTP_PORT") or "465")
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 admin_gate = admin_auth.AdminGate()
