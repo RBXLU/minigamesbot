@@ -89,6 +89,10 @@ class Catalog:
             except (IndexError, KeyError, ValueError):
                 return text
         if depth == 0:
+            # «Подпись: значение», склеенные в коде через +
+            head, sep, tail = text.partition(": ")
+            if sep and exact.get(head + ":") is not None:
+                return exact[head + ":"] + " " + self.line(tail, lang, depth + 1)
             # «<b>Заголовок</b>», «• пункт» — переводим то, что внутри обёртки
             m = _WRAP.match(text)
             if m and m.group(2) and m.group(2) != text:

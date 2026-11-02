@@ -71,6 +71,12 @@ function trLine(text, depth) {
     entry.order.forEach((index, i) => { args[index] = depth ? m[i + 1] : trLine(m[i + 1], 1); });
     return unbrace(entry.target.replace(/(?<!\{)\{(\d+)\}(?!\})/g, (_, i) => (args[i] !== undefined ? args[i] : '')));
   }
+  // «Подпись: значение», склеенные в коде через +
+  const colon = text.indexOf(': ');
+  if (colon > 0 && !depth) {
+    const head = I18N.exact.get(text.slice(0, colon + 1));
+    if (head !== undefined) return head + ' ' + trLine(text.slice(colon + 2), 1);
+  }
   return text;
 }
 
@@ -684,6 +690,149 @@ function buildSubscribe(root) {
   root.appendChild(box);
 }
 
+/* ---------- админка (только владелец, вход по коду) ---------- */
+
+const ADMIN_KEY = 'minigames:admin';
+const ADMIN_ERRORS = {
+  'code cooldown': 'Код уже отправлен — новый можно запросить через минуту',
+  'wrong code': 'Неверный или просроченный код',
+  'admin login': 'Сессия закончилась — войдите заново',
+  'bad amount': 'Сумма — целое число, не ноль',
+  'bad user': 'Не тот пользователь'
+};
+
+function adminToken() {
+  try { return sessionStorage.getItem(ADMIN_KEY) || ''; } catch (e) { return ''; }
+}
+
+function setAdminToken(token) {
+  try { token ? sessionStorage.setItem(ADMIN_KEY, token) : sessionStorage.removeItem(ADMIN_KEY); } catch (e) { /* приватный режим */ }
+}
+
+async function adminCall(op, body) {
+  try {
+    return await action('admin', Object.assign({ op, token: adminToken() }, body || {}));
+  } catch (e) {
+    const code = Object.keys(ADMIN_ERRORS).find(k => e.message === k);
+    if (code === 'admin login') { setAdminToken(''); openAdmin(); }
+    throw new Error(code ? ADMIN_ERRORS[code] : e.message);
+  }
+}
+
+function openAdmin() {
+  openScreen('Админка', true, root => (adminToken() ? buildAdmin(root) : buildAdminLogin(root)));
+}
+
+function buildAdminLogin(root) {
+  const box = el('div', 'panel');
+  box.appendChild(el('h2', null, '🛡 Вход в админку'));
+  box.appendChild(el('p', 'hint', 'Код придёт в консоль хостинга и на почту, если она настроена. Он действует 5 минут.'));
+  const status = el('div', 'hint', '');
+  const input = el('input', 'input');
+  input.inputMode = 'numeric';
+  input.maxLength = 6;
+  input.placeholder = '000000';
+  box.appendChild(button('📨 Получить код', 'btn wide', async () => {
+    try {
+      const out = await adminCall('request_code');
+      status.textContent = out.email ? 'Код отправлен в консоль и на почту' : 'Код отправлен в консоль хостинга';
+      input.focus();
+    } catch (e) { status.textContent = e.message; }
+  }));
+  box.appendChild(field('Код', input));
+  box.appendChild(button('Войти', 'btn wide secondary', async () => {
+    try {
+      const out = await adminCall('verify', { code: input.value });
+      setAdminToken(out.token);
+      haptic('win');
+      openAdmin();
+    } catch (e) { haptic('lose'); status.textContent = e.message; }
+  }));
+  box.appendChild(status);
+  root.appendChild(box);
+}
+
+function adminStat(grid, value, label) {
+  const cell = el('div', 'stat');
+  cell.appendChild(el('b', null, String(value)));
+  cell.appendChild(el('span', null, label));
+  grid.appendChild(cell);
+}
+
+function buildAdmin(root) {
+  const status = el('div', 'hint', 'Загружаю…');
+  root.appendChild(status);
+  adminCall('summary').then(out => renderAdmin(root, out.summary)).catch(e => { status.textContent = e.message; });
+}
+
+function renderAdmin(root, sum) {
+  root.innerHTML = '';
+  const panel = el('div', 'panel');
+  const grid = el('div', 'stat-row');
+  adminStat(grid, sum.users, 'игроков');
+  adminStat(grid, sum.active_day, 'играли за сутки');
+  adminStat(grid, sum.active_week, 'за неделю');
+  adminStat(grid, sum.games, 'партий всего');
+  adminStat(grid, sum.live_games, 'партий сейчас');
+  adminStat(grid, sum.coins, 'монет у игроков');
+  adminStat(grid, sum.banned, 'в бане');
+  adminStat(grid, sum.ideas_new, 'новых идей');
+  panel.appendChild(grid);
+  const biz = sum.business || {};
+  panel.appendChild(el('p', 'hint', `🤖 Автоматизацию подключали: ${biz.total || 0}, подключено сейчас: ${biz.connected || 0}`));
+  root.appendChild(panel);
+
+  sectionTitle(root, sum.maintenance ? '🛠 Идут тех. работы' : '🟢 Бот работает');
+  const mnt = el('div', 'panel');
+  const note = textInput('input', sum.maintenance_note, 'Текст для игроков, например «Вернёмся к 18:00»', 500, () => {});
+  mnt.appendChild(field('Текст на заглушке', note));
+  mnt.appendChild(button('💾 Сохранить текст', 'btn wide secondary', () =>
+    adminCall('maintenance', { note: note.value }).then(out => { toast('Сохранено'); renderAdmin(root, out.summary); }).catch(e => toast(e.message))));
+  mnt.appendChild(button(sum.maintenance ? '✅ Завершить тех. работы' : '🛠 Начать тех. работы', 'btn wide', () => {
+    if (!sum.maintenance && !confirm('Начать тех. работы? Новые партии закроются, начатые доиграются.')) return;
+    adminCall('maintenance', { active: !sum.maintenance }).then(out => renderAdmin(root, out.summary)).catch(e => toast(e.message));
+  }));
+  root.appendChild(mnt);
+
+  sectionTitle(root, '👥 Игроки', 'ID, имя или @username');
+  const search = el('div', 'panel');
+  const query = textInput('input', '', 'Например, 123456789 или Максим', 64, () => {});
+  const results = el('div', 'list');
+  search.appendChild(field('Найти', query));
+  search.appendChild(button('🔍 Искать', 'btn wide secondary', () =>
+    adminCall('find', { query: query.value }).then(out => {
+      results.innerHTML = '';
+      if (!out.users.length) results.appendChild(el('div', 'hint', 'Никого не нашлось'));
+      out.users.forEach(user => results.appendChild(adminUserCard(user)));
+    }).catch(e => toast(e.message))));
+  search.appendChild(results);
+  root.appendChild(search);
+
+  root.appendChild(button('🚪 Выйти из админки', 'btn wide secondary', () => {
+    adminCall('logout').catch(() => {}).finally(() => { setAdminToken(''); goHome(); });
+  }));
+}
+
+function adminUserCard(user) {
+  const card = el('div', 'panel');
+  card.appendChild(el('b', null, `${user.name} · ${user.id}`));
+  card.appendChild(el('div', 'hint', `🪙 ${user.coins} · партий ${user.games}` +
+    (user.banned ? ` · ⛔ в бане${user.ban_reason ? ': ' + user.ban_reason : ''}` : '') +
+    (user.last_game_at ? ` · играл ${user.last_game_at}` : '')));
+  const amount = textInput('input', '', 'Сколько монет: 100 или -100', 9, () => {});
+  amount.inputMode = 'numeric';
+  card.appendChild(field('Монеты', amount));
+  card.appendChild(button('🪙 Изменить баланс', 'btn wide secondary', () =>
+    adminCall('coins', { user: user.id, delta: amount.value }).then(out => card.replaceWith(adminUserCard(out.user)))
+      .catch(e => toast(e.message))));
+  card.appendChild(button(user.banned ? '✅ Разбанить' : '⛔ Забанить', 'btn wide secondary', () => {
+    const reason = user.banned ? '' : (prompt('Причина бана') || '');
+    adminCall('ban', { user: user.id, banned: !user.banned, reason })
+      .then(out => card.replaceWith(adminUserCard(out.user))).catch(e => toast(e.message));
+  }));
+  return card;
+}
+
 /* ---------- технические работы ---------- */
 
 function maintenanceInfo() {
@@ -1105,6 +1254,9 @@ function buildProfile(root) {
   });
   panel.appendChild(stats);
   root.appendChild(panel);
+  if (PROFILE.admin_panel) {
+    root.appendChild(button('🛡 Админка', 'btn wide secondary', () => openAdmin()));
+  }
 
   sectionTitle(root, 'Ваши рекорды', 'Нажмите на игру, чтобы увидеть лучших за неделю');
   const records = el('div', 'list');

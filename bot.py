@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from threading import Thread
 import html
 import json
+import smtplib
+from email.message import EmailMessage
 import inspect
 import threading
 from datetime import datetime, date, timedelta
@@ -44,6 +46,7 @@ from core.db import (
 )
 from core import business as biz_core
 from core import i18n as i18n_core
+from core import admin_auth
 from core import casino
 from core import events as ev
 from room_games import (
@@ -14590,6 +14593,7 @@ def _webapp_profile(user_id, tg_user=None):
         "maintenance": _maintenance_public(user_id),
         "subscription": _webapp_subscription(user_id),
         "lang": _i18n_lang(user_id),
+        "admin_panel": user_id in WEBAPP_ADMIN_IDS,
         "season": {
             "active": season_active(),
             "level": level, "into": into, "per": per, "max": ev.SEASON_MAX_LEVEL,
@@ -14958,6 +14962,141 @@ def _card_table_view(table):
     return {"table": view}
 
 
+# ---------------------------------------------------------------------------
+# Админка в Mini App — только для владельца (WEBAPP_ADMIN_IDS) и только по коду.
+# Код уходит в консоль хостинга и, если настроен SMTP, на ADMIN_EMAIL; ни в
+# Telegram, ни в ответ приложению он не попадает: уведённый аккаунт не поможет.
+# ---------------------------------------------------------------------------
+WEBAPP_ADMIN_IDS = _parse_int_id_set(os.getenv("WEBAPP_ADMIN_IDS", "5782683757"))
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+admin_gate = admin_auth.AdminGate()
+
+
+def _admin_mail_code(code):
+    """Письмо с кодом; без SMTP_USER/SMTP_PASSWORD почта выключена."""
+    if not (ADMIN_EMAIL and SMTP_USER and SMTP_PASSWORD):
+        return False
+
+    def send():
+        try:
+            msg = EmailMessage()
+            msg["Subject"] = f"Код входа в админку MiniGames: {code}"
+            msg["From"] = SMTP_USER
+            msg["To"] = ADMIN_EMAIL
+            msg.set_content(f"Код входа в админку Mini App: {code}\n\nДействует 5 минут. "
+                            "Если вы его не запрашивали — кто-то открыл админку с вашего аккаунта Telegram.")
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+                smtp.login(SMTP_USER, SMTP_PASSWORD)
+                smtp.send_message(msg)
+        except Exception as e:
+            LOGGER.warning("Не удалось отправить код админки на почту: %s", type(e).__name__)
+    threading.Thread(target=send, daemon=True, name="admin-mail").start()
+    return True
+
+
+def _admin_find_users(query):
+    query = str(query or "").strip().lstrip("@").lower()
+    if not query:
+        return []
+    users = load_data().get("users", {})
+    if query.isdigit() and query in users:
+        return [query]
+    found = [uid for uid, rec in users.items() if isinstance(rec, dict)
+             and (query in str(rec.get("display_name") or "").lower() or query == str(rec.get("username") or "").lower())]
+    return found[:10]
+
+
+def _admin_user_card(uid_str):
+    rec = load_user_record(uid_str)
+    return {
+        "id": uid_str, "name": rec.get("display_name") or f"user_{uid_str}",
+        "coins": int(rec.get("coins", 0) or 0), "games": int(rec.get("games_total", 0) or 0),
+        "banned": bool(rec.get("is_banned")), "ban_reason": rec.get("ban_reason") or "",
+        "language": rec.get("language") or "", "last_game_at": rec.get("last_game_at") or "",
+    }
+
+
+def _admin_summary():
+    users = load_data().get("users", {})
+    day_ago = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    recs = [r for r in users.values() if isinstance(r, dict)]
+    return {
+        "users": len(recs),
+        "active_day": sum(1 for r in recs if str(r.get("last_game_at") or "") >= day_ago),
+        "active_week": sum(1 for r in recs if str(r.get("last_game_at") or "") >= week_ago),
+        "games": sum(int(r.get("games_total", 0) or 0) for r in recs),
+        "coins": sum(int(r.get("coins", 0) or 0) for r in recs),
+        "banned": sum(1 for r in recs if r.get("is_banned")),
+        "live_games": _active_games(MAINTENANCE_ACTIVITY_WINDOW),
+        "maintenance": maintenance_active(),
+        "maintenance_note": _maintenance_note() or "",
+        "ideas_new": sum(1 for item in _idea_items() if item.get("status") == "new"),
+        "business": biz_core.telemetry_summary(_biz["users"]),
+    }
+
+
+def _webapp_admin(uid, tg_user, payload):
+    if uid not in WEBAPP_ADMIN_IDS:
+        raise ValueError("not found")              # для остальных этой админки просто нет
+    op = str(payload.get("op") or "")
+    if op == "request_code":
+        code = admin_gate.request_code(uid)
+        if code is None:
+            raise ValueError("code cooldown")
+        LOGGER.warning("🔐 Код входа в админку Mini App: %s (действует 5 минут)", code)
+        return {"sent": True, "email": _admin_mail_code(code)}
+    if op == "verify":
+        token = admin_gate.verify(uid, payload.get("code"))
+        if not token:
+            LOGGER.warning("🔐 Неверный код админки Mini App от %s, осталось попыток: %s",
+                           uid, admin_gate.attempts_left(uid))
+            raise ValueError("wrong code")
+        log_admin_action(uid, "webapp_admin_login", db_path=DB_FILE)
+        return {"token": token}
+    token = payload.get("token")
+    if not admin_gate.check(uid, token):
+        raise ValueError("admin login")
+    if op == "logout":
+        admin_gate.logout(token)
+        return {"ok": True}
+    if op == "summary":
+        return {"summary": _admin_summary()}
+    if op == "maintenance":
+        if "active" in payload and bool(payload["active"]) != maintenance_active():
+            _set_maintenance(uid, bool(payload["active"]))
+        if "note" in payload:
+            _set_maintenance_note(uid, str(payload.get("note") or "")[:500])
+        return {"summary": _admin_summary()}
+    if op == "find":
+        return {"users": [_admin_user_card(u) for u in _admin_find_users(payload.get("query"))]}
+    target = str(payload.get("user") or "")
+    if not target.isdigit():
+        raise ValueError("bad user")
+    if op == "coins":
+        try:
+            delta = int(payload.get("delta"))
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("bad amount")
+        if not -1_000_000 <= delta <= 1_000_000 or delta == 0:
+            raise ValueError("bad amount")
+        with user_record(target) as rec:
+            _ensure_profile_fields(rec)
+            rec["coins"] = max(0, int(rec.get("coins", 0) or 0) + delta)
+        log_admin_action(uid, "webapp_coins", target_user_id=int(target), details={"delta": delta}, db_path=DB_FILE)
+        return {"user": _admin_user_card(target)}
+    if op == "ban":
+        if int(target) in BOT_ADMIN_IDS:
+            raise ValueError("bad user")
+        _set_user_ban(uid, int(target), bool(payload.get("banned")), str(payload.get("reason") or "")[:200])
+        return {"user": _admin_user_card(target)}
+    raise ValueError("unknown action")
+
+
 def _webapp_subscription(user_id):
     """Mini App открывается кнопкой «Играть» у любого, кто написал боту, — подписку
     проверяем здесь, как в /start. None — подписка не нужна или уже есть."""
@@ -14989,7 +15128,7 @@ webapp_server = create_webapp(
         "season": _webapp_season,
         "gift": _webapp_gift,
         "idea": _webapp_idea,
-    }.items()},
+    }.items()} | {"admin": _webapp_admin},
 )
 
 
