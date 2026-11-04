@@ -15010,12 +15010,15 @@ def _admin_find_users(query):
     query = str(query or "").strip().lstrip("@").lower()
     if not query:
         return []
-    users = load_data().get("users", {})
-    if query.isdigit() and query in users:
+    if query.isdigit() and load_user_record(query):
         return [query]
-    found = [uid for uid, rec in users.items() if isinstance(rec, dict)
-             and (query in str(rec.get("display_name") or "").lower() or query == str(rec.get("username") or "").lower())]
-    return found[:10]
+    found = []
+    for uid, rec in _iter_users():
+        if query in str(rec.get("display_name") or "").lower() or query == str(rec.get("username") or "").lower():
+            found.append(uid)
+            if len(found) == 10:
+                break
+    return found
 
 
 def _admin_user_card(uid_str):
@@ -15029,17 +15032,19 @@ def _admin_user_card(uid_str):
 
 
 def _admin_summary():
-    users = load_data().get("users", {})
     day_ago = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
     week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-    recs = [r for r in users.values() if isinstance(r, dict)]
+    totals = dict.fromkeys(("users", "active_day", "active_week", "games", "coins", "banned"), 0)
+    for _, r in _iter_users():
+        last = str(r.get("last_game_at") or "")
+        totals["users"] += 1
+        totals["active_day"] += last >= day_ago
+        totals["active_week"] += last >= week_ago
+        totals["games"] += int(r.get("games_total", 0) or 0)
+        totals["coins"] += int(r.get("coins", 0) or 0)
+        totals["banned"] += bool(r.get("is_banned"))
     return {
-        "users": len(recs),
-        "active_day": sum(1 for r in recs if str(r.get("last_game_at") or "") >= day_ago),
-        "active_week": sum(1 for r in recs if str(r.get("last_game_at") or "") >= week_ago),
-        "games": sum(int(r.get("games_total", 0) or 0) for r in recs),
-        "coins": sum(int(r.get("coins", 0) or 0) for r in recs),
-        "banned": sum(1 for r in recs if r.get("is_banned")),
+        **totals,
         "live_games": _active_games(MAINTENANCE_ACTIVITY_WINDOW),
         "maintenance": maintenance_active(),
         "maintenance_note": _maintenance_note() or "",
