@@ -527,18 +527,53 @@ class _LoadedState(dict):
     __slots__ = ("loaded_users", "loaded_state")
 
 
-def load_state(db_path=DEFAULT_DB_PATH):
-    return _with_retries(lambda: _load_state_once(db_path), "load_state")
+def load_state(db_path=DEFAULT_DB_PATH, include_users=True):
+    """Всё состояние. include_users=False — без пользователей: их записи — это
+    почти вся база, а комнатам и общим счётчикам они не нужны."""
+    return _with_retries(lambda: _load_state_once(db_path, include_users), "load_state")
 
 
-def _load_state_once(db_path):
+ITER_BATCH = 100
+
+
+def iter_users(db_path=DEFAULT_DB_PATH):
+    """Пользователи по одному: (id строкой, запись). Для рейтингов и топов —
+    в памяти разом одна разобранная запись, а не вся база."""
+    def read(after):
+        with _DB_LOCK:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn, db_path)
+                return conn.execute(
+                    "SELECT user_id, data_json FROM users WHERE user_id > ? ORDER BY user_id LIMIT ?",
+                    (after, ITER_BATCH),
+                ).fetchall()
+            finally:
+                conn.close()
+    after = -(2 ** 63)
+    while True:
+        rows = _with_retries(lambda: read(after), "iter_users")
+        if not rows:
+            return
+        after = rows[-1]["user_id"]
+        for row in rows:
+            try:
+                record = json.loads(row["data_json"])
+            except Exception:
+                continue
+            if isinstance(record, dict):
+                yield str(row["user_id"]), record
+
+
+def _load_state_once(db_path, include_users=True):
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
             _ensure_schema(conn, db_path)
             state = _LoadedState(users={})
             state.loaded_users = {}
-            for row in conn.execute("SELECT user_id, data_json FROM users"):
+            user_rows = conn.execute("SELECT user_id, data_json FROM users") if include_users else ()
+            for row in user_rows:
                 state.loaded_users[row["user_id"]] = row["data_json"]
                 try:
                     state["users"][str(row["user_id"])] = json.loads(row["data_json"])
