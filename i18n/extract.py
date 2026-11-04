@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PY_FILES = ["bot.py", "bussines_bot.py", "room_games.py", "core/events.py", "core/business.py",
+PY_FILES = ["bot.py", "business_triggers.py", "room_games.py", "core/events.py", "core/business.py",
             "core/casino.py", "quests.json"]
 UK_ONLY = re.compile(r"[ЇїІіЄєҐґ]")       # уже украинский вариант — переводить нечего
 JS_FILES = ["webapp/app.js", "webapp/index.html"]
