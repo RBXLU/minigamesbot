@@ -24,7 +24,7 @@ import uuid
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
-from bussines_bot import is_business_game_trigger, register_business_handlers
+from business_triggers import is_business_game_trigger, register_business_handlers
 from core.db import (
     BusinessMessageStore,
     backup_database,
@@ -744,7 +744,7 @@ def _news_emoji_pattern_part(symbol):
     return part
 
 
-# Один проход вместо цепочки str.replace(), которая вкладывала теги друг в друга.
+# Один проход по тексту, чтобы теги не вкладывались друг в друга.
 # Границы обязательны: если совпадение — лишь часть составного эмодзи (тон кожи,
 # ZWJ-связка, кейкап, VS16), Telegram отвечает ENTITY_TEXT_INVALID.
 _EMOJI_CONTINUATION = "\ufe0f\ufe0e\u200d\u20e3\U0001f3fb-\U0001f3ff"
@@ -854,8 +854,8 @@ _original_reply_to = bot.reply_to
 _original_edit_message_text = bot.edit_message_text
 _original_answer_inline_query = bot.answer_inline_query
 
-# Отказ по кастомным эмодзи (400 ENTITY_TEXT_INVALID / CUSTOM_EMOJI_INVALID) раньше
-# убивал отправку целиком, и бот молчал на любую команду.
+# Отказ по кастомным эмодзи (400 ENTITY_TEXT_INVALID / CUSTOM_EMOJI_INVALID) не должен
+# срывать отправку: сообщение уходит повторно, уже без них.
 _CUSTOM_EMOJI_REJECTIONS = (
     "entity_text_invalid",
     "custom_emoji_invalid",
@@ -1375,9 +1375,7 @@ def save_data(data):
 
 
 # Горячие обработчики (партия, квесты, достижения, бан, язык) трогают одного
-# игрока. Раньше каждый из них разбирал всю базу через load_data/save_data:
-# одна партия делала 22 полных чтения и 4 полных записи, и память с временем
-# ответа росли вместе с числом пользователей.
+# игрока — и читают и пишут только его запись, а не всю базу целиком.
 _USER_RECORD_LOCK = threading.RLock()
 
 
@@ -6216,7 +6214,7 @@ def shop_callbacks(call):
 # Telegram Business: бот подключён к личному аккаунту владельца.
 #
 # • собеседник удалил или изменил сообщение — пишем владельцу в чат с ботом,
-#   что там было (для этого помним последние сообщения — только в памяти);
+#   что там было (для этого помним сообщения три дня — в памяти и в базе);
 # • .mute 10m — сообщения собеседника удаляются сразу после отправки, .unmute;
 # • игры прямо в переписке: .игры, .rps, .ttt, .dice;
 # • открытая телеметрия: при подключении спрашиваем согласие считать время
@@ -7383,7 +7381,7 @@ def _admin_events_text():
         lines.append("")
     lines.append(
         "Анонсы уходят всем сами: в день старта и на следующий день после конца. "
-        f"С EVENT_FORCE не рассылаются. Кнопки ниже присылают анонс только вам."
+        "С EVENT_FORCE не рассылаются. Кнопки ниже присылают анонс только вам."
     )
     return "\n".join(lines)
 
@@ -10153,7 +10151,7 @@ def ai_callback(call):
                     req2["status"] = "done"
                     save_data(d2)
 
-                except Exception as e:
+                except Exception:
                     d3 = load_data()
                     u3 = d3.setdefault("users", {}).setdefault(str(uid), {})
                     pending3 = u3.setdefault("pending", {})
@@ -10196,10 +10194,6 @@ def _ttt_win_line(board, symbol):
         if board[a] == board[b] == board[c] == symbol:
             return (a, b, c)
     return None
-
-
-def _ttt_wins(board, symbol):
-    return _ttt_win_line(board, symbol) is not None
 
 
 def _ttt_restart_kb(gid):
@@ -10749,7 +10743,7 @@ def tetris_callback(call):
             bot.answer_callback_query(call.id)
         elif action == "drop":
             bot.answer_callback_query(call.id, "Блок отпущен")
-            # Плавное падение вместо мгновенного телепорта
+            # Блок падает плавно, по клетке за кадр
             if st.get("piece") and not st.get("over"):
                 p = st["piece"]
                 start_y = p["y"]
