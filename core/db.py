@@ -683,14 +683,6 @@ def export_state_to_json(json_path, db_path=DEFAULT_DB_PATH):
     os.replace(tmp, target)
 
 
-def get_user_record(user_id, db_path=DEFAULT_DB_PATH):
-    return load_user(user_id, db_path=db_path)[0]
-
-
-def save_user_record(user_id, user_data, db_path=DEFAULT_DB_PATH):
-    save_user(user_id, user_data, db_path=db_path)
-
-
 class BusinessMessageStore:
     """Хранилище копий бизнес-сообщений для MessageCache: put / get / delete / purge."""
 
