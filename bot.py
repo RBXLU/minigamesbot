@@ -4,7 +4,9 @@ import re
 import requests
 from telebot.apihelper import ApiTelegramException
 import random
+import ctypes
 import functools
+import gc
 import time
 import logging
 import traceback
@@ -32,6 +34,7 @@ from core.db import (
     database_is_healthy,
     export_state_to_json,
     initialize_storage,
+    iter_users,
     load_state,
     load_user,
     log_admin_action,
@@ -1356,9 +1359,11 @@ USER_COOLDOWN_SECONDS = float(os.getenv("USER_COOLDOWN_SECONDS", "0.8"))
 ROOM_IDLE_TIMEOUT_SECONDS = int(os.getenv("ROOM_IDLE_TIMEOUT_SECONDS", "900"))
 _user_cooldowns = {}
 
-def load_data():
+def load_data(include_users=True):
+    """Всё состояние разом. Дорого: каждая запись игрока разбирается в память —
+    для одного игрока есть user_record, для топов — _iter_users."""
     try:
-        data = load_state(DB_FILE)
+        data = load_state(DB_FILE, include_users=include_users)
     except Exception as e:
         log_exception("load_data", e, notify_admin=True)
         data = {"users": {}}
@@ -1372,6 +1377,10 @@ def load_data():
 
 def save_data(data):
     save_state_to_db(data, DB_FILE)
+
+
+def _iter_users():
+    return iter_users(DB_FILE)
 
 
 # Горячие обработчики (партия, квесты, достижения, бан, язык) трогают одного
@@ -1945,9 +1954,7 @@ def _hw_ranking():
     """Все игроки с тыквами, по убыванию добытого. Полный проход по базе —
     только при открытии рейтинга, не на каждое нажатие."""
     rows = []
-    for uid_str, rec in load_data().get("users", {}).items():
-        if not isinstance(rec, dict):
-            continue
+    for uid_str, rec in _iter_users():
         bucket = (rec.get("events") or {}).get(ev.HALLOWEEN) or {}
         earned = int(bucket.get("earned", 0) or 0) if isinstance(bucket, dict) else 0
         if earned > 0:
@@ -2303,9 +2310,8 @@ def _games_ranking():
     now = time.time()
     if now - _ranking_cache["at"] > 600:
         rows = []
-        for uid_str, rec in load_data().get("users", {}).items():
-            if isinstance(rec, dict):
-                rows.append((int(rec.get("games_total", 0) or 0), uid_str))
+        for uid_str, rec in _iter_users():
+            rows.append((int(rec.get("games_total", 0) or 0), uid_str))
         rows.sort(key=lambda row: (-row[0], row[1]))
         _ranking_cache.update(at=now, rows=rows)
     return _ranking_cache["rows"]
@@ -2720,8 +2726,7 @@ def _record_game_result_once(user_id, game_key, result, session_id, extra=None, 
 
 
 def _render_replay_text(uid):
-    d = load_data()
-    rec = _ensure_profile_fields(d.get("users", {}).get(str(uid), {}))
+    rec = _ensure_profile_fields(load_user_record(uid))
     replay = rec.get("last_replay")
     if not replay or not isinstance(replay, dict):
         return "📼 Нет данных о последней игре.\nСыграйте любую игру и сюда запишется результат."
@@ -2961,7 +2966,7 @@ def _render_onboarding_text(uid):
 
 
 def _rooms_get_data():
-    d = load_data()
+    d = load_data(include_users=False)
     rooms = d.setdefault("rooms", {"pool": [], "active": {}, "free_title": ROOM_FREE_TITLE})
     rooms.setdefault("pool", [])
     rooms.setdefault("active", {})
@@ -3194,6 +3199,36 @@ def _room_close(code, reason=""):
         pass
     return True
 
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+except OSError:
+    _libc = None
+
+
+def _rss_mb():
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmRSS"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return None
+
+
+def _release_memory():
+    """Python редко отдаёт освобождённую память системе сам: после пика RSS так и
+    остаётся высоким, а лимит хостинга считает именно его."""
+    before = _rss_mb()
+    gc.collect()
+    if _libc is not None:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
+    LOGGER.info("Память: %s → %s МБ", before, _rss_mb())
+
+
 def _games_watchdog(interval=60):
     """Раз в минуту выгружает партии, которые создались и остались без игрока,
     и следит, доиграны ли партии во время тех. работ."""
@@ -3210,6 +3245,8 @@ def _games_watchdog(interval=60):
         except Exception as e:
             log_exception("maintenance_watch", e)
         ticks += 1
+        if ticks % 10 == 0:
+            _release_memory()
         if ticks % 10 == 0 and any(_biz_counts.values()):
             LOGGER.info("Business за 10 мин: сообщений %(message)s, правок %(edited)s, "
                         "удалений %(deleted)s, подключений %(connection)s", dict(_biz_counts))
@@ -3484,13 +3521,13 @@ def pong_game_loop(gid, inline_id):
         time.sleep(0.6)
 
 def clear_premium(user_id):
-    d = load_data()
+    d = load_data(include_users=False)
     if str(user_id) in d.get("premium", {}):
         del d["premium"][str(user_id)]
-    user = d.setdefault("users", {}).setdefault(str(user_id), {})
-    user["is_premium"] = False
-    user["premium_until"] = None
-    save_data(d)
+        save_data(d)
+    with user_record(user_id) as user:
+        user["is_premium"] = False
+        user["premium_until"] = None
     
 
 def start_premium_watcher(bot_instance, check_interval=3600):
@@ -3498,7 +3535,7 @@ def start_premium_watcher(bot_instance, check_interval=3600):
     def watcher():
         while not _shutdown_event.is_set():
             try:
-                data = load_data()
+                data = load_data(include_users=False)
                 pm = data.get("premium", {})
                 # fromtimestamp() ниже отдаёт локальное время, поэтому и здесь оно же.
                 now = datetime.now()
@@ -5251,10 +5288,7 @@ def _telos_default_state():
     }
 
 def _telos_get_state(user_id):
-    data = load_data()
-    users = data.setdefault("users", {})
-    user = users.setdefault(str(user_id), {})
-    state = user.get("telos")
+    state = load_user_record(user_id).get("telos")
     if not isinstance(state, dict):
         state = _telos_default_state()
     state.setdefault("booted", True)
@@ -5266,18 +5300,12 @@ def _telos_get_state(user_id):
     state.setdefault("terminal_history", [])
     state.setdefault("mini_games", {"guess_target": None})
     state.setdefault("created_at", int(time.time()))
-    user["telos"] = state
-    users[str(user_id)] = user
-    save_data(data)
+    _telos_save_state(user_id, state)
     return state
 
 def _telos_save_state(user_id, state):
-    data = load_data()
-    users = data.setdefault("users", {})
-    user = users.setdefault(str(user_id), {})
-    user["telos"] = state
-    users[str(user_id)] = user
-    save_data(data)
+    with user_record(user_id) as rec:
+        rec["telos"] = state
 
 def _telos_home_text(user_id):
     st = _telos_get_state(user_id)
@@ -6085,15 +6113,11 @@ def topusers_cmd(message):
     uid = message.from_user.id
     update_user_streak(uid, message.from_user.first_name or message.from_user.username or str(uid))
 
-    d = load_data()
-    users = d.get("users", {})
     today = date.today().isoformat()
     yesterday = (date.today() - timedelta(days=1)).isoformat()
 
     rows = []
-    for uid_str, rec in users.items():
-        if not isinstance(rec, dict):
-            continue
+    for uid_str, rec in _iter_users():
         streak = int(rec.get("streak_current", 0) or 0)
         last_day = rec.get("streak_last_day")
         if streak <= 0:
@@ -6225,7 +6249,8 @@ def shop_callbacks(call):
 # ---------------------------------------------------------------------------
 _biz = {}
 _biz_lock = threading.Lock()
-biz_cache = biz_core.MessageCache(store=BusinessMessageStore(DB_FILE))
+# В памяти — только свежие сообщения: остальные кэш достанет из базы
+biz_cache = biz_core.MessageCache(limit=2000, store=BusinessMessageStore(DB_FILE))
 # Сколько бизнес-событий пришло — раз в 10 минут уходит в лог (только числа, без текста)
 _biz_counts = {"message": 0, "edited": 0, "deleted": 0, "connection": 0}
 biz_games = BoundedGames()
@@ -9197,14 +9222,13 @@ def ai_inline(query):
         return
 
     req_id = uuid.uuid4().hex
-    data = load_data()
-    pending = data["users"][str(uid)]["pending"]
-    pending[req_id] = {"q": text, "a": None, "status": "wait"}
-    # Инлайн-запрос приходит на каждую набранную букву — храним только последние
-    for stale in list(pending)[:-AI_PENDING_KEEP]:
-        if pending[stale].get("status") != "process":
-            pending.pop(stale, None)
-    save_data(data)
+    with user_record(uid) as rec:
+        pending = rec["pending"] = rec.get("pending") if isinstance(rec.get("pending"), dict) else {}
+        pending[req_id] = {"q": text, "a": None, "status": "wait"}
+        # Инлайн-запрос приходит на каждую набранную букву — храним только последние
+        for stale in list(pending)[:-AI_PENDING_KEEP]:
+            if pending[stale].get("status") != "process":
+                pending.pop(stale, None)
 
     result = types.InlineQueryResultArticle(
         id=req_id,
@@ -10084,22 +10108,18 @@ def ai_callback(call):
             bot.answer_callback_query(call.id, "Это не ваш запрос")
             return
 
-        data = load_data()
-        user = data["users"].get(str(uid))
+        user = load_user_record(uid)
         if not user:
             bot.answer_callback_query(call.id, "Данные пользователя не найдены")
             return
 
-        req = user.get("pending", {}).get(rid)
+        req = (user.get("pending") or {}).get(rid)
         if not req:
             bot.answer_callback_query(call.id, "Запрос устарел")
             return
         status = str(req.get("status", "wait")).strip().lower()
         if status not in ("wait", "process", "done"):
             status = "wait"
-        if req.get("status") != status:
-            req["status"] = status
-            save_data(data)
 
         if action == "refresh":
             if status == "done":
@@ -10119,47 +10139,39 @@ def ai_callback(call):
                 if not allow:
                     bot.answer_callback_query(call.id, err, show_alert=True)
                     return
-                req["status"] = "process"
-                req["started_at"] = int(time.time())
-                save_data(data)
+                with user_record(uid) as rec:
+                    live = (rec.get("pending") or {}).get(rid)
+                    if not live or live.get("status") not in (None, "wait"):
+                        bot.answer_callback_query(call.id, "⏳ Ответ уже готовится")
+                        return
+                    live["status"] = "process"
+                    live["started_at"] = int(time.time())
 
             def work():
                 try:
-                    prompt = req["q"]
-                    answer = ask_ai(prompt, uid)
-                    d2 = load_data()
-                    u2 = d2.setdefault("users", {}).setdefault(str(uid), {})
-                    pending2 = u2.setdefault("pending", {})
-                    req2 = pending2.get(rid)
-                    if req2 is None:
-                        return
-                    if req2.get("status") != "process":
-                        return
-
-                    # списываем лимит только после фактического получения ответа
-                    today = date.today().isoformat()
-                    if u2.get("date") != today:
-                        u2["date"] = today
-                        u2["count"] = 0
-                    if u2.get("daily_date") != today:
-                        u2["daily_date"] = today
-                        u2["daily_count"] = 0
-                    u2["count"] = int(u2.get("count", 0) or 0) + 1
-                    u2["daily_count"] = int(u2.get("daily_count", 0) or 0) + 1
-
-                    req2["a"] = answer
-                    req2["status"] = "done"
-                    save_data(d2)
-
+                    answer = ask_ai(req["q"], uid)
+                    with user_record(uid) as u2:
+                        req2 = (u2.get("pending") or {}).get(rid)
+                        if req2 is None or req2.get("status") != "process":
+                            return
+                        # списываем лимит только после фактического получения ответа
+                        today = date.today().isoformat()
+                        if u2.get("date") != today:
+                            u2["date"] = today
+                            u2["count"] = 0
+                        if u2.get("daily_date") != today:
+                            u2["daily_date"] = today
+                            u2["daily_count"] = 0
+                        u2["count"] = int(u2.get("count", 0) or 0) + 1
+                        u2["daily_count"] = int(u2.get("daily_count", 0) or 0) + 1
+                        req2["a"] = answer
+                        req2["status"] = "done"
                 except Exception:
-                    d3 = load_data()
-                    u3 = d3.setdefault("users", {}).setdefault(str(uid), {})
-                    pending3 = u3.setdefault("pending", {})
-                    req3 = pending3.get(rid)
-                    if req3 is not None:
-                        req3["a"] = "❌ Временная ошибка AI-сервиса. Нажмите «Обновить» или «Получить ответ» ещё раз."
-                        req3["status"] = "done"
-                        save_data(d3)
+                    with user_record(uid) as u3:
+                        req3 = (u3.get("pending") or {}).get(rid)
+                        if req3 is not None:
+                            req3["a"] = "❌ Временная ошибка AI-сервиса. Нажмите «Обновить» или «Получить ответ» ещё раз."
+                            req3["status"] = "done"
 
             Thread(target=work, daemon=True).start()
             safe_edit_message(call, _ai_prompt_message(req.get("q"), "process"), reply_markup=_ai_prompt_kb(uid, rid))
@@ -10171,7 +10183,10 @@ def ai_callback(call):
             if started_at and (int(time.time()) - started_at) > 180:
                 req["status"] = "done"
                 req["a"] = "❌ Ответ не был получен вовремя (таймаут 3 минуты). Нажмите «Получить ответ» ещё раз."
-                save_data(data)
+                with user_record(uid) as rec:
+                    live = (rec.get("pending") or {}).get(rid)
+                    if live is not None and live.get("status") == "process":
+                        live.update(status="done", a=req["a"])
                 safe_edit_message(call, _ai_prompt_message(req.get("q"), "done", req.get("a")), reply_markup=_ai_prompt_kb(uid, rid))
                 bot.answer_callback_query(call.id, "⌛ Таймаут запроса")
                 return
@@ -13773,7 +13788,7 @@ def sys_save_value(message):
             BROADCAST_SETTINGS["btn_text"] = message.text
             BROADCAST_SETTINGS["btn_type"] = "callback"
 
-        d = load_data()
+        d = load_data(include_users=False)
         d["broadcast"] = BROADCAST_SETTINGS
         save_data(d)
         bot.send_message(uid, "✅ Broadcast сохранён!")
@@ -13932,9 +13947,7 @@ def _group_menu_kb():
 def _group_top_text(chat_id):
     key = str(chat_id)
     rows = []
-    for uid_str, rec in load_data().get("users", {}).items():
-        if not isinstance(rec, dict):
-            continue
+    for uid_str, rec in _iter_users():
         played = int(((rec.get("groups") or {}).get(key)) or 0) if isinstance(rec.get("groups"), dict) else 0
         if played > 0:
             rows.append((played, str(rec.get("display_name") or f"user_{uid_str}")))
@@ -14385,8 +14398,8 @@ def _weekly_top(game_key, limit=10):
         return cached[1]
     rows = []
     week_id = _week_id()
-    for uid_str, rec in load_data().get("users", {}).items():
-        week = rec.get("records_week") if isinstance(rec, dict) else None
+    for uid_str, rec in _iter_users():
+        week = rec.get("records_week")
         if isinstance(week, dict) and week.get("week") == week_id and week.get(game_key):
             rows.append((week[game_key], uid_str, str(rec.get("display_name") or f"user_{uid_str}")))
     higher = WEBAPP_RECORD_GAMES[game_key][0]
@@ -15123,12 +15136,9 @@ def menu_action_callbacks(call):
         )
         return
     if action == "toggle_notifications":
-        d = load_data()
-        rec = d.setdefault("users", {}).setdefault(str(uid), {})
-        rec = _ensure_profile_fields(rec)
-        rec["notifications_enabled"] = not rec.get("notifications_enabled", True)
-        d["users"][str(uid)] = rec
-        save_data(d)
+        with user_record(uid) as rec:
+            _ensure_profile_fields(rec)
+            rec["notifications_enabled"] = not rec.get("notifications_enabled", True)
         bot.answer_callback_query(
             call.id,
             localized_text(
@@ -15149,7 +15159,7 @@ def play_game_info_callback(call):
     game_key = call.data.replace("play_", "", 1)
     title = get_game_title(uid, game_key)
     description = get_game_description(uid, game_key)
-    launch_hint = _last_game_instruction(uid) if game_key == load_data().get("users", {}).get(str(uid), {}).get("last_game") else None
+    launch_hint = _last_game_instruction(uid) if game_key == load_user_record(uid).get("last_game") else None
     lines = [f"🎮 {title}", "", description]
     if launch_hint and title in launch_hint:
         lines.append("")
@@ -15173,12 +15183,8 @@ def _open_user_shop(chat_id, uid):
 
 
 def _render_leaderboard_text(uid):
-    d = load_data()
-    users = d.get("users", {})
     rows = []
-    for uid_str, rec in users.items():
-        if not isinstance(rec, dict):
-            continue
+    for uid_str, rec in _iter_users():
         total = int(rec.get("games_total", 0) or 0)
         name = rec.get("display_name") or f"user_{uid_str}"
         rows.append((total, str(name)))
