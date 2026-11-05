@@ -6275,7 +6275,7 @@ def profile_cmd(message):
     if not _guard_user(uid, chat_id=message.chat.id, action="profile"):
         return
     update_user_streak(uid, message.from_user.first_name or message.from_user.username or str(uid))
-    bot.send_message(message.chat.id, _render_profile_text(uid))
+    send_rich_screen(message.chat.id, uid, _render_profile_text(uid), is_html=False)
 
 
 @bot.message_handler(commands=["replay"])
@@ -8614,7 +8614,7 @@ def bot_instruction(message):
 def profile_button(message):
     uid = message.from_user.id
     update_user_streak(uid, message.from_user.first_name or message.from_user.username or str(uid))
-    bot.send_message(message.chat.id, _render_profile_text(uid))
+    send_rich_screen(message.chat.id, uid, _render_profile_text(uid), is_html=False)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("start_"))
 def start_info_callbacks(call):
@@ -8652,7 +8652,7 @@ def start_info_callbacks(call):
         elif data == "start_profile":
             uid = call.from_user.id
             update_user_streak(uid, call.from_user.first_name or call.from_user.username or str(uid))
-            safe_edit_message(call, _render_profile_text(uid), reply_markup=_start_info_kb())
+            edit_rich_screen(call, uid, _render_profile_text(uid), _start_info_kb(), is_html=False)
         elif data == "start_shop":
             uid = call.from_user.id
             safe_edit_message(call, _shop_render_text(uid), reply_markup=_shop_items_kb(uid))
@@ -15193,7 +15193,7 @@ def help_command(message):
     uid = message.from_user.id
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("❓ Частые вопросы", callback_data="faq_menu"))
-    bot.send_message(message.chat.id, _render_help_text(uid), parse_mode="HTML", reply_markup=kb)
+    send_rich_screen(message.chat.id, uid, _render_help_text(uid), kb)
 
 
 @bot.message_handler(commands=["news", "whatsnew"])
@@ -15489,14 +15489,14 @@ def show_games_menu(chat_id, uid):
     kb.add(types.InlineKeyboardButton(t(uid, "games_room"), callback_data="games_room"))
     kb.add(types.InlineKeyboardButton(t(uid, "back_to_menu"), callback_data="main_menu"))
 
-    bot.send_message(
-        chat_id,
+    send_rich_screen(
+        chat_id, uid,
         f"{t(uid, 'choose_game_category')}\n\n"
         f"• {t(uid, 'games_solo')} — {localized_text(uid, 'соло-прохождение и рекорды', 'solo runs and high scores', 'соло-проходження та рекорди')}\n"
         f"• {t(uid, 'games_vs_bot')} — {localized_text(uid, 'партии один на один', 'one-on-one matches', 'партії один на один')}\n"
         f"• {t(uid, 'games_multi')} — {localized_text(uid, 'игры с другими игроками', 'matches with other players', 'ігри з іншими гравцями')}\n"
         f"• {t(uid, 'games_room')} — {localized_text(uid, 'режим для комнаты и компании', 'room mode for groups', 'режим для кімнати та компанії')}",
-        reply_markup=kb
+        kb, is_html=False,
     )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("games_"))
@@ -15526,16 +15526,12 @@ def games_category_handler(call):
         kb.add(types.InlineKeyboardButton(title, callback_data=f"play_{game}"))
         descriptions.append(f"• {title} — {get_game_description(uid, game)}")
     kb.add(types.InlineKeyboardButton(t(uid, "back_to_menu"), callback_data="main_menu"))
-    
+
+    heading = {"solo": "games_solo", "vs_bot": "games_vs_bot", "multi": "games_multi", "room": "games_room"}[category]
     try:
-        bot.edit_message_text(
-            "\n".join(descriptions),
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=kb,
-        )
-    except Exception:
-        pass
+        edit_rich_screen(call, uid, t(uid, heading) + "\n\n" + "\n".join(descriptions), kb, is_html=False)
+    except Exception as e:
+        log_exception("games_category", e, user_id=uid)
     
     bot.answer_callback_query(call.id)
 
@@ -15548,7 +15544,7 @@ def menu_action_callbacks(call):
         bot.answer_callback_query(call.id)
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("❓ Частые вопросы", callback_data="faq_menu"))
-        bot.send_message(call.message.chat.id, _render_help_text(uid), parse_mode="HTML", reply_markup=kb)
+        send_rich_screen(call.message.chat.id, uid, _render_help_text(uid), kb)
         return
     if action == "menu_whats_new":
         bot.answer_callback_query(call.id)
@@ -15635,8 +15631,7 @@ def _render_leaderboard_text(uid):
 
 def show_profile(message, uid):
     """Show user profile in their language"""
-    profile_text = _render_profile_text(uid)
-    bot.send_message(message.chat.id, profile_text, parse_mode="HTML")
+    send_rich_screen(message.chat.id, uid, _render_profile_text(uid), is_html=False)
 
 def show_ai_menu(message, uid):
     bot.send_message(
@@ -15897,7 +15892,17 @@ def _i18n_wrap(name):
                 values["reply_markup"] = _i18n_object(values["reply_markup"], lang)
             if values.get("results"):
                 values["results"] = [_i18n_object(r, lang) for r in values["results"]]
-        return original(*bound.args[1:], **bound.kwargs)
+        # Всё по именам: BoundArguments.args делает позиционными и то, что передали
+        # по имени (parse_mode=…), и обёртка ниже получила бы аргумент дважды
+        call_kwargs = {}
+        for key, value in bound.arguments.items():
+            if key == "self":
+                continue
+            if signature.parameters[key].kind is inspect.Parameter.VAR_KEYWORD:
+                call_kwargs.update(value)
+            else:
+                call_kwargs[key] = value
+        return original(**call_kwargs)
     setattr(bot, name, wrapper)
 
 
@@ -15954,6 +15959,113 @@ def _process_updates_with_language(updates):
 
 
 bot.process_new_updates = _process_updates_with_language
+
+
+# ---------------------------------------------------------------------------
+# Rich-сообщения (Bot API 10.1): заголовок, абзацы, кнопки прямо в сообщении и
+# подпись внизу. Экраны собираются из обычного текста и клавиатуры: первая
+# строка — заголовок, строка с двоеточием на конце — подзаголовок, остальное —
+# абзацы. Текст и кнопки переводятся до сборки. Не вышло отправить rich —
+# уходит обычное сообщение, как раньше.
+# ---------------------------------------------------------------------------
+RICH_FOOTER = "MiniGames"
+_RICH_ATTR = {"callback_data": "data", "url": "url"}
+
+
+def _markup_from_rows(rows):
+    return types.InlineKeyboardMarkup(keyboard=[[types.InlineKeyboardButton.de_json(dict(b)) for b in row] for row in rows])
+
+
+def _rich_line(line, is_html):
+    return line if is_html else html.escape(line)
+
+
+def _rich_html(text, kb=None, is_html=True):
+    """(html, keyboard_for_reply_markup). Кнопки, которые rich не умеет (web_app и
+    т. п.), остаются обычной клавиатурой под сообщением."""
+    lines = [line.strip() for line in str(text or "").split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    parts = []
+    if lines:
+        title = lines.pop(0)
+        title = re.sub(r"</?b>", "", title) if is_html else title
+        parts.append(f"<h2>{_rich_line(title, is_html)}</h2>")
+    paragraph = []
+
+    def flush():
+        if paragraph:
+            parts.append("<p>" + "<br>".join(paragraph) + "</p>")
+            paragraph.clear()
+    for line in lines:
+        if not line:
+            flush()
+        elif line.endswith(":") and len(line) < 60:
+            flush()
+            parts.append(f"<h3>{_rich_line(re.sub(r'</?b>', '', line) if is_html else line, is_html)}</h3>")
+        else:
+            paragraph.append(_rich_line(line, is_html))
+    flush()
+    leftover = None
+    if kb is not None:
+        rows = json.loads(kb.to_json()).get("inline_keyboard", [])
+        rich_rows, plain_rows = [], []
+        for row in rows:
+            if all(any(k in button for k in _RICH_ATTR) for button in row):
+                rich_rows.append(row)
+            else:
+                plain_rows.append(row)
+        for row in rich_rows:
+            buttons = []
+            for button in row:
+                kind = next(k for k in _RICH_ATTR if k in button)
+                style = f' style="{button["style"]}"' if button.get("style") else ""
+                buttons.append(f'<tg-button type="{kind}"{style} {_RICH_ATTR[kind]}="{html.escape(str(button[kind]), quote=True)}">'
+                               f'{html.escape(button["text"])}</tg-button>')
+            parts.append('<tg-button-row align="center">' + "".join(buttons) + "</tg-button-row>")
+        if plain_rows:
+            leftover = _markup_from_rows(plain_rows)
+    parts.append(f"<footer>{RICH_FOOTER}</footer>")
+    return "\n".join(parts), leftover
+
+
+def _rich_prepare(uid, text, kb, is_html):
+    lang = _i18n_lang(uid)
+    if lang != "ru":
+        text = I18N.text(text, lang)
+        if kb is not None:
+            kb = _i18n_object(kb, lang)
+            kb = _markup_from_rows(kb.to_dict().get("inline_keyboard", []))
+    return _rich_html(text, kb, is_html)
+
+
+def send_rich_screen(chat_id, uid, text, kb=None, is_html=True):
+    body, leftover = _rich_prepare(uid, text, kb, is_html)
+    try:
+        return _original_send_rich(chat_id, types.InputRichMessage(html=body), reply_markup=leftover)
+    except Exception as e:
+        LOGGER.info("Rich-сообщение не ушло, отправляю обычное: %s", e)
+        return bot.send_message(chat_id, text, parse_mode="HTML" if is_html else None, reply_markup=kb)
+
+
+def edit_rich_screen(call, uid, text, kb=None, is_html=True):
+    body, leftover = _rich_prepare(uid, text, kb, is_html)
+    msg = call.message
+    try:
+        if msg is not None:
+            return _original_edit_text(chat_id=msg.chat.id, message_id=msg.message_id,
+                                       rich_message=types.InputRichMessage(html=body), reply_markup=leftover)
+        return _original_edit_text(inline_message_id=call.inline_message_id,
+                                   rich_message=types.InputRichMessage(html=body), reply_markup=leftover)
+    except ApiTelegramException as e:
+        if "message is not modified" in str(e):
+            return None
+        LOGGER.info("Rich-сообщение не изменилось, правлю обычным: %s", e)
+        return safe_edit_message(call, text, reply_markup=kb, parse_mode="HTML" if is_html else None)
+
+
+_original_send_rich = bot.send_rich_message
+_original_edit_text = telebot.TeleBot.edit_message_text.__get__(bot)
 
 
 if __name__ == "__main__":
