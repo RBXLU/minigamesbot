@@ -15962,14 +15962,13 @@ bot.process_new_updates = _process_updates_with_language
 
 
 # ---------------------------------------------------------------------------
-# Rich-сообщения (Bot API 10.1): заголовок, абзацы, кнопки прямо в сообщении и
-# подпись внизу. Экраны собираются из обычного текста и клавиатуры: первая
-# строка — заголовок, строка с двоеточием на конце — подзаголовок, остальное —
-# абзацы. Текст и кнопки переводятся до сборки. Не вышло отправить rich —
-# уходит обычное сообщение, как раньше.
+# Rich-сообщения (Bot API 10.1): заголовок, абзацы и подпись внизу; кнопки —
+# обычной клавиатурой под сообщением. Экран собирается из обычного текста:
+# первая строка — заголовок, строка с двоеточием на конце — подзаголовок,
+# остальное — абзацы. Текст и кнопки переводятся до сборки. Не вышло
+# отправить rich — уходит обычное сообщение, как раньше.
 # ---------------------------------------------------------------------------
 RICH_FOOTER = "MiniGames"
-_RICH_ATTR = {"callback_data": "data", "url": "url"}
 
 
 def _markup_from_rows(rows):
@@ -15981,8 +15980,7 @@ def _rich_line(line, is_html):
 
 
 def _rich_html(text, kb=None, is_html=True):
-    """(html, keyboard_for_reply_markup). Кнопки, которые rich не умеет (web_app и
-    т. п.), остаются обычной клавиатурой под сообщением."""
+    """(html, клавиатура). Кнопки остаются обычной клавиатурой под сообщением."""
     lines = [line.strip() for line in str(text or "").split("\n")]
     while lines and not lines[0]:
         lines.pop(0)
@@ -16006,27 +16004,8 @@ def _rich_html(text, kb=None, is_html=True):
         else:
             paragraph.append(_rich_line(line, is_html))
     flush()
-    leftover = None
-    if kb is not None:
-        rows = json.loads(kb.to_json()).get("inline_keyboard", [])
-        rich_rows, plain_rows = [], []
-        for row in rows:
-            if all(any(k in button for k in _RICH_ATTR) for button in row):
-                rich_rows.append(row)
-            else:
-                plain_rows.append(row)
-        for row in rich_rows:
-            buttons = []
-            for button in row:
-                kind = next(k for k in _RICH_ATTR if k in button)
-                style = f' style="{button["style"]}"' if button.get("style") else ""
-                buttons.append(f'<tg-button type="{kind}"{style} {_RICH_ATTR[kind]}="{html.escape(str(button[kind]), quote=True)}">'
-                               f'{html.escape(button["text"])}</tg-button>')
-            parts.append('<tg-button-row align="center">' + "".join(buttons) + "</tg-button-row>")
-        if plain_rows:
-            leftover = _markup_from_rows(plain_rows)
     parts.append(f"<footer>{RICH_FOOTER}</footer>")
-    return "\n".join(parts), leftover
+    return "\n".join(parts), kb
 
 
 def _rich_prepare(uid, text, kb, is_html):
