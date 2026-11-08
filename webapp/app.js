@@ -1679,7 +1679,7 @@ GAMES.guess = function (root, ctx) {
 GAMES.reaction = function (root, ctx) {
   let armed = false, startAt = 0, timer = null;
   const status = statusLine(root, 'Нажмите «Старт» и ждите сигнала');
-  const pad = button('▶️ Старт', 'btn wide', start);
+  const pad = el('button', 'btn wide', '▶️ Старт');
   root.appendChild(pad);
 
   function start() {
@@ -1706,7 +1706,7 @@ GAMES.reaction = function (root, ctx) {
       ctx.finish('losses');
       return;
     }
-    if (!armed) return;
+    if (!armed) return start();
     armed = false;
     const ms = Date.now() - startAt;
     showOutcome(status, `⚡ ${ms} мс`, ms < 400 ? 'wins' : null);
@@ -2377,10 +2377,12 @@ GAMES.pong = function (root, ctx) {
   const g = canvas.getContext('2d');
   const status = statusLine(root, 'До 5 очков');
 
-  const PADDLE = 62, THICK = 9;
+  // Мяч ускоряется после каждого отбития, а бот видит его с ошибкой и двигается
+  // не быстрее BOT_SPEED: на длинном розыгрыше он начинает промахиваться.
+  const PADDLE = 62, THICK = 9, START_SPEED = 4.1, MAX_SPEED = 9.5, BOT_SPEED = 3.3;
   let playerX = width / 2 - PADDLE / 2;
   let botX = playerX;
-  let ball = { x: width / 2, y: height / 2, dx: 2.6, dy: -3.2 };
+  let ball, botAim = width / 2;
   let score = [0, 0], raf = null, over = false;
 
   function move(clientX) {
@@ -2391,9 +2393,32 @@ GAMES.pong = function (root, ctx) {
   canvas.addEventListener('pointermove', e => { e.preventDefault(); move(e.clientX); });
   canvas.addEventListener('pointerdown', e => move(e.clientX));
 
-  function reset(direction) {
-    ball = { x: width / 2, y: height / 2, dx: (Math.random() < 0.5 ? -1 : 1) * 2.6, dy: direction * 3.2 };
+  function launch(angle, speed, direction) {
+    ball.dx = Math.sin(angle) * speed;
+    ball.dy = Math.cos(angle) * speed * direction;
   }
+
+  function reset(direction) {
+    ball = { x: width / 2, y: height / 2, speed: START_SPEED };
+    launch((Math.random() - 0.5) * 0.9, START_SPEED, direction);
+    aimBot();
+  }
+
+  /** Бот прикидывает, куда прилетит мяч; чем быстрее мяч, тем сильнее ошибается. */
+  function aimBot() {
+    const miss = (ball.speed - START_SPEED) * 9 + 6;
+    botAim = ball.x + ball.dx / Math.abs(ball.dy || 1) * (ball.y - 24) + (Math.random() - 0.5) * 2 * miss;
+    while (botAim < 0 || botAim > width) botAim = botAim < 0 ? -botAim : 2 * width - botAim;
+  }
+
+  /** Отбитие: угол зависит от того, какой частью ракетки попали, скорость растёт. */
+  function bounce(paddleX, direction) {
+    const offset = Math.max(-1, Math.min(1, (ball.x - paddleX - PADDLE / 2) / (PADDLE / 2)));
+    ball.speed = Math.min(MAX_SPEED, ball.speed * 1.07);
+    launch(offset * 1.05, ball.speed, direction);
+    if (direction < 0) aimBot();          // мяч полетел к боту
+  }
+  reset(-1);
 
   function stop(playerWon) {
     over = true;
@@ -2404,15 +2429,20 @@ GAMES.pong = function (root, ctx) {
   }
 
   function loop() {
-    botX += Math.max(-3.1, Math.min(3.1, (ball.x - PADDLE / 2) - botX));
+    // Пока мяч летит к игроку, бот не гадает, а возвращается к центру
+    const target = ball.dy < 0 ? botAim : width / 2;
+    botX += Math.max(-BOT_SPEED, Math.min(BOT_SPEED, (target - PADDLE / 2) - botX));
     botX = Math.max(0, Math.min(width - PADDLE, botX));
 
     ball.x += ball.dx;
     ball.y += ball.dy;
-    if (ball.x < 6 || ball.x > width - 6) ball.dx *= -1;
+    if (ball.x < 6 || ball.x > width - 6) {
+      ball.dx *= -1;
+      ball.x = Math.max(6, Math.min(width - 6, ball.x));
+    }
 
-    if (ball.y > height - 24 && ball.x > playerX && ball.x < playerX + PADDLE && ball.dy > 0) ball.dy *= -1;
-    if (ball.y < 24 && ball.x > botX && ball.x < botX + PADDLE && ball.dy < 0) ball.dy *= -1;
+    if (ball.dy > 0 && ball.y > height - 24 && ball.y < height - 8 && ball.x > playerX - 4 && ball.x < playerX + PADDLE + 4) bounce(playerX, -1);
+    if (ball.dy < 0 && ball.y < 24 && ball.y > 8 && ball.x > botX - 4 && ball.x < botX + PADDLE + 4) bounce(botX, 1);
 
     if (ball.y > height) { score[1] += 1; reset(-1); }
     if (ball.y < 0) { score[0] += 1; reset(1); }
