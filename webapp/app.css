@@ -586,9 +586,9 @@ body.with-tabs main {
   border-radius: 12px;
   transition: color .2s, background .2s;
 }
-.tabs button span { font-size: 21px; line-height: 1; transition: transform .25s var(--ease); }
+.tabs button i { font-size: 19px; line-height: 1; height: 22px; display: grid; place-items: center; transition: transform .25s var(--ease); }
 .tabs button.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.tabs button.active span { transform: translateY(-1px) scale(1.12); }
+.tabs button.active i { transform: translateY(-1px); }
 
 .coins.pumpkins { background: linear-gradient(180deg, #3a2414, #26170c); border-color: rgba(255, 150, 50, .35); color: #ffb35c; }
 
@@ -974,82 +974,88 @@ body.with-tabs main {
 .reaction-pad[data-phase="wait"] { background: var(--bad); }
 .reaction-pad[data-phase="go"] { background: var(--good); animation: pop .2s var(--ease); }
 
-/* слоты: корпус автомата, лампочки и три барабана с линией выплаты */
+/* слоты: корпус в цветах приложения, три барабана и рычаг сбоку */
 .slot-machine {
   position: relative;
+  max-width: 340px;
   margin: 6px auto 0;
-  max-width: 360px;
-  padding: 14px 14px 16px;
-  border-radius: 26px;
-  background: linear-gradient(180deg, #7a1d2a, #4a0f19);
-  box-shadow: inset 0 0 0 3px #e9b44c, inset 0 0 0 7px #4a0f19, 0 10px 26px rgba(0, 0, 0, .35);
-}
-.slot-machine::before {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border-radius: 22px;
-  background: radial-gradient(circle, #ffe08a 0 2.5px, transparent 3.5px) 0 0 / 18px 18px;
-  opacity: .55;
-  pointer-events: none;
-  /* лампочки только по краю: середину вырезает маска */
-  padding: 4px;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-}
-.slot-machine.spinning::before { animation: bulbs .5s steps(2) infinite; }
-.slot-machine.won::before { animation: bulbs .25s steps(2) infinite; opacity: 1; }
-@keyframes bulbs { 50% { opacity: .15; } }
-.slot-title {
-  text-align: center;
-  font-weight: 800;
-  letter-spacing: .14em;
-  font-size: 15px;
-  color: #ffd76b;
-  text-shadow: 0 0 10px rgba(255, 200, 80, .6);
-  margin: 4px 0 10px;
+  padding: 10px;
+  margin-right: max(28px, calc((100% - 340px) / 2));
+  border-radius: 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
 }
 .slot-window {
-  --sym: 66px;
+  --sym: 64px;
   position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-  padding: 6px;
-  border-radius: 16px;
-  background: #1b0b0f;
 }
 .slot-reel {
   height: calc(var(--sym) * 3);
   overflow: hidden;
-  border-radius: 11px;
-  background: linear-gradient(180deg, #cfc6b8, #fffaf1 30%, #fffaf1 70%, #cfc6b8);
-  box-shadow: inset 0 8px 12px rgba(0, 0, 0, .35), inset 0 -8px 12px rgba(0, 0, 0, .35);
+  border-radius: 12px;
+  background: var(--card-2);
+  /* верх и низ барабана уходят в тень — видно, что он круглый */
+  -webkit-mask: linear-gradient(transparent, #000 22%, #000 78%, transparent);
+  mask: linear-gradient(transparent, #000 22%, #000 78%, transparent);
 }
 .slot-strip { will-change: transform; }
 .slot-sym {
   height: var(--sym);
   display: grid;
   place-items: center;
-  font-size: 40px;
+  font-size: 38px;
   line-height: 1;
 }
 .slot-line {
   position: absolute;
-  left: 2px;
-  right: 2px;
+  left: -4px;
+  right: -4px;
   top: 50%;
-  height: calc(var(--sym) + 4px);
+  height: var(--sym);
   transform: translateY(-50%);
-  border: 2px solid rgba(255, 215, 107, .75);
-  border-radius: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
   pointer-events: none;
 }
-.slot-machine.won .slot-line { border-color: #ffd76b; box-shadow: 0 0 16px rgba(255, 215, 107, .9); animation: flash .5s var(--ease) 3; }
-.slot-pays { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 12px; font-size: 12.5px; color: var(--muted); }
-.slot-pays b { color: var(--warn); }
-.btn.slot-spin { background: linear-gradient(180deg, #f0b63e, #d98a1c); color: #2a1503; font-size: 17px; letter-spacing: .02em; }
+.slot-machine.won .slot-line { border-color: var(--good); background: color-mix(in srgb, var(--good) 10%, transparent); }
+.slot-lever {
+  position: absolute;
+  top: 34px;
+  right: -26px;
+  width: 14px;
+  height: 92px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--card-2);
+  cursor: pointer;
+  transform-origin: 50% 100%;
+}
+.slot-knob {
+  position: absolute;
+  left: 50%;
+  top: -14px;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+.slot-lever.pulled { animation: lever .5s var(--ease); }
+@keyframes lever { 40% { transform: scaleY(-.6); } }
+.slot-pays {
+  display: grid;
+  gap: 2px;
+  max-width: 340px;
+  margin: 0 auto 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.slot-pay { display: flex; justify-content: space-between; padding: 3px 4px; }
+.slot-pay b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* плинко */
 canvas.plinko-board, canvas.rocket-sky { background: transparent; border: 0; }
@@ -1067,7 +1073,7 @@ canvas.plinko-board { margin-top: 4px; }
     conic-gradient(var(--good) 0 var(--win), color-mix(in srgb, var(--accent) 22%, var(--card-2)) var(--win) 360deg);
   box-shadow: 0 0 0 6px var(--card), 0 0 0 8px var(--line), 0 10px 28px rgba(0, 0, 0, .3);
 }
-.wheel-stage.won .wheel { box-shadow: 0 0 0 6px var(--card), 0 0 0 8px var(--good), 0 0 30px color-mix(in srgb, var(--good) 60%, transparent); }
+.wheel-stage.won .wheel { box-shadow: 0 0 0 6px var(--card), 0 0 0 8px var(--good); }
 .wheel-pointer {
   position: absolute;
   left: 50%;
@@ -1100,11 +1106,12 @@ canvas.plinko-board { margin-top: 4px; }
   margin: 4px auto 0;
   border-radius: 18px;
   overflow: hidden;
-  background: radial-gradient(120% 90% at 20% 110%, #2b2f6b, #0b0f24 70%);
+  background: #10141c;
   border: 1px solid var(--line);
+  transition: background .3s;
 }
-.rocket-wrap.crashed { background: radial-gradient(120% 90% at 50% 50%, #5a1a1a, #160909 70%); }
-.rocket-wrap.cashed { background: radial-gradient(120% 90% at 20% 110%, #1d5a42, #08190f 70%); }
+.rocket-wrap.crashed { background: #1e1214; }
+.rocket-wrap.cashed { background: #0f1c17; }
 .rocket-x {
   position: absolute;
   top: 14px;
@@ -1115,13 +1122,11 @@ canvas.plinko-board { margin-top: 4px; }
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: #fff;
-  text-shadow: 0 2px 12px rgba(0, 0, 0, .5);
   pointer-events: none;
 }
 .rocket-wrap.crashed .rocket-x { color: #ff8a7a; }
 .rocket-wrap.cashed .rocket-x { color: #7ff0b8; }
-.btn.cashout { background: var(--good); animation: pulse 1s ease-in-out infinite; }
-@keyframes pulse { 50% { transform: scale(1.02); } }
+.btn.cashout { background: var(--good); box-shadow: none; }
 
 /* русская рулетка: барабан на 6 гнёзд поворачивается на гнездо за выстрел */
 .rr-table { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
@@ -1160,7 +1165,7 @@ canvas.plinko-board { margin-top: 4px; }
   transform: rotate(calc(var(--i) * 60deg)) translateY(-40px);
 }
 .rr-chamber.empty { background: #3b4048; }
-.rr-chamber.fired { background: radial-gradient(circle, #ffd76b, #ef6a5c 60%, #6b1d14); box-shadow: 0 0 14px #ef6a5c; }
+.rr-chamber.fired { background: var(--bad); }
 
 .field.setting { margin: 4px 0 20px; }
 .field.setting .seg { margin: 2px 0 0; }
@@ -1178,24 +1183,28 @@ canvas.plinko-board { margin-top: 4px; }
 :root[data-ui="compact"] .stat { padding: 8px 6px; }
 :root[data-ui="compact"] .stat b { font-size: 17px; }
 
-/* Аркада: крупные яркие карточки, эмодзи сверху */
-:root[data-ui="arcade"] { --radius: 24px; }
-:root[data-ui="arcade"] .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+/* Аркада: крупные карточки цвета категории, иконка сверху */
+:root[data-ui="arcade"] .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
 :root[data-ui="arcade"][data-device="desktop"] .grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 :root[data-ui="arcade"] .tile {
   flex-direction: column;
   justify-content: center;
   text-align: center;
-  min-height: 132px;
-  gap: 8px;
-  font-size: 15.5px;
+  min-height: 120px;
+  gap: 10px;
   border: 0;
   color: #fff;
-  background: linear-gradient(155deg, color-mix(in srgb, var(--tint) 88%, #fff), color-mix(in srgb, var(--tint) 70%, #000));
-  box-shadow: 0 8px 20px color-mix(in srgb, var(--tint) 35%, transparent);
+  background: color-mix(in srgb, var(--tint) 80%, #000);
 }
-:root[data-ui="arcade"] .tile .emoji { flex-basis: 54px; width: 54px; height: 54px; font-size: 32px; border-radius: 50%; background: rgba(255, 255, 255, .22); }
-:root[data-ui="arcade"] .tile .played { color: rgba(255, 255, 255, .82); }
-:root[data-ui="arcade"] .section-title { font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
-:root[data-ui="arcade"] .btn { border-radius: 18px; text-transform: uppercase; letter-spacing: .03em; }
-:root[data-ui="arcade"] .panel { background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 18%, var(--card)), var(--card)); }
+:root[data-ui="arcade"] .tile .emoji { flex-basis: auto; width: auto; height: auto; font-size: 28px; background: none; color: #fff; }
+:root[data-ui="arcade"] .tile .played { color: rgba(255, 255, 255, .8); }
+
+/* иконки Font Awesome: в плитке — цвет категории */
+.tile .emoji .fa-solid { font-size: 20px; color: var(--tint, var(--accent)); }
+:root[data-ui="arcade"] .tile .emoji .fa-solid { font-size: 28px; color: #fff; }
+.field-label .fa-solid { width: 18px; margin-right: 2px; color: var(--muted); }
+.rr-seat .fa-solid { margin-right: 4px; color: var(--muted); }
+.prize-row .fa-solid { margin-right: 2px; }
+.prize-row .place-1 .fa-solid { color: #e6b422; }
+.prize-row .place-2 .fa-solid { color: #a8b0ba; }
+.prize-row .place-3 .fa-solid { color: #c27c46; }

@@ -227,8 +227,22 @@ function ripple(event, node) {
   setTimeout(() => wave.remove(), 600);
 }
 
-function button(label, className, onClick) {
+/** Иконка Font Awesome: icon('rocket') → <i class="fa-solid fa-rocket">. */
+function icon(name, className) {
+  const node = el('i', 'fa-solid fa-' + name + (className ? ' ' + className : ''));
+  node.setAttribute('aria-hidden', 'true');
+  return node;
+}
+
+/** Подпись с иконкой слева; заменяет всё содержимое узла. */
+function setLabel(node, iconName, text) {
+  node.replaceChildren(...(iconName ? [icon(iconName), document.createTextNode(' ' + text)] : [text]));
+  return node;
+}
+
+function button(label, className, onClick, iconName) {
   const b = el('button', className || 'btn', label);
+  if (iconName) setLabel(b, iconName, label);
   b.addEventListener('click', event => {
     ripple(event, b);
     haptic('tap');
@@ -584,10 +598,22 @@ function sectionTitle(root, title, sub) {
   if (sub) root.appendChild(el('div', 'section-sub', sub));
 }
 
-function gameTile(emoji, name, category, extra) {
+// Иконки игр вместо эмодзи с сервера; игра без иконки остаётся со своим эмодзи
+const GAME_ICONS = {
+  g2048: 'table-cells', tetris: 'shapes', snake: 'worm', flappy: 'dove', wordle: 'spell-check',
+  hangman: 'font', minesweeper: 'bomb', guess: 'bullseye', reaction: 'bolt', slot: 'dice',
+  plinko: 'circle-dot', synth: 'atom', rocket: 'rocket', roulette: 'gun', coin: 'coins',
+  blackjack: 'heart', poker: 'clover', rps: 'hand-scissors', ttt: 'xmark', pong: 'table-tennis-paddle-ball',
+  combogame: 'khanda', quizgame: 'brain', millionaire: 'sack-dollar', bship: 'ship', chess: 'chess-knight',
+  mafia: 'masks-theater', wordgame: 'comments', iduel: 'hand-fist'
+};
+
+function gameTile(key, emoji, name, category, extra) {
   const tile = el('button', 'tile');
   tile.style.setProperty('--tint', CATEGORY_TINT[category] || CATEGORY_TINT.solo);
-  tile.appendChild(el('span', 'emoji', emoji));
+  const badge = el('span', 'emoji');
+  badge.appendChild(GAME_ICONS[key] ? icon(GAME_ICONS[key]) : document.createTextNode(emoji));
+  tile.appendChild(badge);
   const label = el('span');
   label.appendChild(document.createTextNode(name));
   if (extra) label.appendChild(extra);
@@ -678,7 +704,7 @@ function buildHome(root) {
       const note = best ? el('span', 'played record', '🏆 рекорд ' + best)
         : played ? el('span', 'played', played + ' ' + plural(played, 'партия', 'партии', 'партий'))
         : el('span', 'played', 'ещё не играли');
-      const tile = gameTile(emoji, name, category, note);
+      const tile = gameTile(key, emoji, name, category, note);
       tile.addEventListener('click', event => {
         ripple(event, tile);
         haptic('tap');
@@ -693,7 +719,7 @@ function buildHome(root) {
   sectionTitle(root, 'Позвать друга', 'Эти игры для двоих — бот отправит приглашение в любой чат');
   const chatGrid = el('div', 'grid');
   CFG.chat_only.forEach(([key, name, emoji, query]) => {
-    const tile = gameTile(emoji, name, 'chat', el('span', 'played', 'нужен второй игрок'));
+    const tile = gameTile(key, emoji, name, 'chat', el('span', 'played', 'нужен второй игрок'));
     tile.addEventListener('click', event => {
       ripple(event, tile);
       openChatGame(name, query);
@@ -1376,8 +1402,8 @@ function openRecords(game, name) {
       const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
       if (data.prizes) {
         const prizes = el('div', 'prize-row');
-        data.prizes.forEach((coins, i) => prizes.appendChild(el('span', null, medals[i + 1] + ' ' + coins + ' 🪙')));
-        sectionTitle(root, 'Награды недели', 'В понедельник первые трое получают монеты на баланс');
+        data.prizes.forEach((coins, i) => prizes.appendChild(setLabel(el('span', 'place-' + (i + 1)), 'medal', coins + ' 🪙')));
+        sectionTitle(root, 'Награды недели', 'Начисляются в понедельник первым трём местам');
         root.appendChild(prizes);
       }
       sectionTitle(root, 'Лучшие за неделю');
@@ -1409,9 +1435,9 @@ function openRecords(game, name) {
 /* ---------- настройки ---------- */
 
 const UI_STYLES = {
-  classic: 'Плитки с эмодзи, как раньше',
-  compact: 'Список в одну колонку: больше игр на экране',
-  arcade: 'Крупные яркие карточки в две колонки'
+  classic: 'Плитки в сетку',
+  compact: 'Список: на экране помещается больше игр',
+  arcade: 'Крупные цветные карточки'
 };
 
 function applyUiStyle() {
@@ -1439,9 +1465,9 @@ function openSettings() {
 }
 
 /** Как field(), но без <label>: щелчок по подписи не должен нажимать первую кнопку. */
-function settingRow(labelText, control, hint) {
+function settingRow(iconName, labelText, control, hint) {
   const wrap = el('div', 'field setting');
-  wrap.appendChild(el('span', 'field-label', labelText));
+  wrap.appendChild(setLabel(el('span', 'field-label'), iconName, labelText));
   wrap.appendChild(control);
   if (hint) wrap.appendChild(el('span', 'field-hint', hint));
   return wrap;
@@ -1449,25 +1475,25 @@ function settingRow(labelText, control, hint) {
 
 function buildSettings(root) {
   const set = (key, value) => { SETTINGS[key] = value; saveSettings(); };
-  root.appendChild(settingRow('🔊 Звук', segmented(
+  root.appendChild(settingRow('volume-high', 'Звук', segmented(
     [[0, 'Выкл'], [1, 'Тихо'], [2, 'Средне'], [3, 'Громко']], SETTINGS.volume,
     value => { set('volume', value); sound('coin'); }),
-    'Щелчки кнопок, барабаны, выигрыш и взрыв ракеты'));
-  root.appendChild(settingRow('📳 Вибрация', segmented(
+    'Кнопки, барабаны, выигрыш, взрыв ракеты'));
+  root.appendChild(settingRow('mobile-screen', 'Вибрация', segmented(
     [[true, 'Вкл'], [false, 'Выкл']], SETTINGS.haptics, value => set('haptics', value))));
 
   const lang = PROFILE && PROFILE.lang ? PROFILE.lang : I18N.lang;
-  root.appendChild(settingRow('🌍 Язык', segmented(
+  root.appendChild(settingRow('globe', 'Язык', segmented(
     [['ru', 'Русский'], ['en', 'English'], ['uk', 'Українська']], lang, async value => {
       try {
         setCoins((await action('settings', { op: 'lang', lang: value })).profile);
       } catch (e) {
         await loadLang(value);                // без входа через Telegram — хотя бы на экране
       }
-    }), 'Язык общий с ботом: сменится и в чате'));
+    }), 'Сменится и в чате с ботом'));
 
   const styleHint = el('div', 'field-hint', UI_STYLES[SETTINGS.ui] || UI_STYLES.classic);
-  const styleField = settingRow('🎨 Оформление', segmented(
+  const styleField = settingRow('palette', 'Оформление', segmented(
     [['classic', 'Классика'], ['compact', 'Компакт'], ['arcade', 'Аркада']], SETTINGS.ui, value => {
       set('ui', value);
       applyUiStyle();
@@ -1476,18 +1502,18 @@ function buildSettings(root) {
   styleField.appendChild(styleHint);
   root.appendChild(styleField);
 
-  root.appendChild(settingRow('🖥 Раскладка', segmented(
-    [['mobile', '📱 Телефон'], ['desktop', '🖥 Широкий экран']], currentLayout(),
-    value => setLayout(value, true)), 'Широкий экран — управление с клавиатуры'));
+  root.appendChild(settingRow('display', 'Раскладка', segmented(
+    [['mobile', 'Телефон'], ['desktop', 'Широкий экран']], currentLayout(),
+    value => setLayout(value, true)), 'На широком экране играть можно с клавиатуры'));
 
   const bot = CFG && CFG.bot_username;
   if (bot) {
-    sectionTitle(root, 'Как открыть приложение', 'Кнопка «Играть» в чате, кнопка «Открыть» в профиле бота или ссылка');
-    root.appendChild(button('📤 Поделиться ссылкой на игры', 'btn wide secondary', () => {
+    sectionTitle(root, 'Позвать друзей', 'Ссылка открывает игры сразу в Telegram');
+    root.appendChild(button('Поделиться ссылкой', 'btn wide secondary', () => {
       const link = `https://t.me/${bot}?startapp`;
       openLink('https://t.me/share/url?url=' + encodeURIComponent(link) +
-        '&text=' + encodeURIComponent('Заходи поиграть в мини-игры 🎮'));
-    }));
+        '&text=' + encodeURIComponent('Заходи поиграть в мини-игры'));
+    }, 'share-nodes'));
   }
 }
 
@@ -1994,7 +2020,7 @@ GAMES.reaction = function (root, ctx) {
   // Одно состояние на одну кнопку: idle → wait (рано жать) → go (жать!) → idle
   let phase = 'idle', startAt = 0, timer = null;
   const status = statusLine(root, 'Нажмите «Старт» и ждите сигнала');
-  const pad = el('button', 'reaction-pad', '▶️ Старт');
+  const pad = el('button', 'reaction-pad', 'Старт');
   root.appendChild(pad);
 
   function setPhase(next, label, text) {
@@ -2007,26 +2033,26 @@ GAMES.reaction = function (root, ctx) {
   function press() {
     if (phase === 'idle') {
       haptic('tap');
-      setPhase('wait', '⏳ Ждите…', 'Терпение… сигнал будет внезапно');
+      setPhase('wait', 'Ждите…', 'Нажмите, когда поле станет зелёным');
       status.classList.remove('win', 'lose');
       timer = setTimeout(() => {
         timer = null;
         startAt = performance.now();
-        setPhase('go', '⚡ ЖМИ!', 'Сигнал!');
+        setPhase('go', 'Жми!', '');
         sound('coin');
       }, 1500 + randInt(3500));
     } else if (phase === 'wait') {
       clearTimeout(timer);
       timer = null;
-      setPhase('idle', '🔁 Ещё раз');
-      showOutcome(status, '😅 Рано! Дождитесь сигнала', 'losses');
+      setPhase('idle', 'Ещё раз');
+      showOutcome(status, 'Рано, поле ещё не зелёное', 'losses');
       haptic('lose');
       ctx.finish('losses');
     } else if (phase === 'go') {
       const ms = Math.round(performance.now() - startAt);
       const result = ms < 400 ? 'wins' : 'draws';
-      setPhase('idle', '🔁 Ещё раз');
-      showOutcome(status, `⚡ ${ms} мс` + (ms < 250 ? ' — молниеносно!' : ms < 400 ? ' — отлично!' : ''), result);
+      setPhase('idle', 'Ещё раз');
+      showOutcome(status, `${ms} мс`, result);
       ctx.finish(result, { score: ms + ' мс' });
     }
   }
@@ -2035,7 +2061,7 @@ GAMES.reaction = function (root, ctx) {
   pad.addEventListener('pointerdown', event => { event.preventDefault(); press(); });
   pad.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') event.preventDefault(); });
   bindKeys({ ' ': press, Enter: press });
-  hintLine(root, 'Меньше 400 мс — победа. Лучшее время идёт в рекорды недели.');
+  hintLine(root, 'Быстрее 400 мс — победа');
   return () => { if (timer) clearTimeout(timer); };
 };
 
@@ -2043,7 +2069,6 @@ GAMES.reaction = function (root, ctx) {
 GAMES.slot = function (root) {
   const SYMBOLS = ['🍒', '🍋', '🍉', '⭐', '💎', '7️⃣'];
   const machine = el('div', 'slot-machine');
-  machine.appendChild(el('div', 'slot-title', '★ МИНИ-СЛОТЫ ★'));
   const win = el('div', 'slot-window');
   const strips = [0, 1, 2].map(() => {
     const reel = el('div', 'slot-reel');
@@ -2054,14 +2079,20 @@ GAMES.slot = function (root) {
   });
   win.appendChild(el('div', 'slot-line'));
   machine.appendChild(win);
+  // Рычаг сбоку: за него можно дёрнуть, как за настоящий
+  const leverArm = el('button', 'slot-lever');
+  leverArm.setAttribute('aria-label', 'Крутить');
+  leverArm.appendChild(el('i', 'slot-knob'));
+  leverArm.addEventListener('click', () => lever.click());
+  machine.appendChild(leverArm);
   root.appendChild(machine);
 
-  const status = statusLine(root, 'Выберите ставку и дёргайте рычаг');
+  const status = statusLine(root, 'Выберите ставку');
   const pays = el('div', 'slot-pays');
-  [['7️⃣7️⃣7️⃣', '×20'], ['три одинаковых', '×10'], ['пара', 'ставка назад']].forEach(([combo, x]) => {
-    const item = el('span');
+  [['7️⃣ 7️⃣ 7️⃣', '×20'], ['три одинаковых', '×10'], ['два одинаковых', '×1']].forEach(([combo, x]) => {
+    const item = el('div', 'slot-pay');
+    item.appendChild(el('span', null, combo));
     item.appendChild(el('b', null, x));
-    item.appendChild(document.createTextNode(' ' + combo));
     pays.appendChild(item);
   });
   root.appendChild(pays);
@@ -2095,30 +2126,31 @@ GAMES.slot = function (root) {
     });
   }
 
-  const lever = button('🎰 Крутить', 'btn wide slot-spin', async () => {
+  const lever = button('Крутить', 'btn wide', async () => {
     if (spinning) return;
     spinning = true;
     lever.disabled = true;
     machine.classList.remove('won');
     machine.classList.add('spinning');
     status.classList.remove('win', 'lose');
-    status.textContent = 'Барабаны крутятся…';
+    status.textContent = '';
+    replay(leverArm, 'pulled');
     try {
       const out = await action('luck', { game: 'slot', bet: picker.get() });
       ticker = setInterval(() => sound('tick'), 85);
       await Promise.all(strips.map((strip, i) => spinReel(strip, out.reels[i], i)));
       clearInterval(ticker);
-      const text = out.multiplier >= 20 ? `💰 ДЖЕКПОТ! +${out.win - out.bet} 🪙`
-        : out.multiplier >= 10 ? `🎉 Три в ряд! +${out.win - out.bet} 🪙`
-        : out.multiplier === 1 ? '✨ Пара — ставка вернулась'
-        : `😢 Мимо — −${out.bet} 🪙`;
+      const text = out.multiplier >= 20 ? `Джекпот! +${out.win - out.bet} 🪙`
+        : out.multiplier >= 10 ? `Три в ряд: +${out.win - out.bet} 🪙`
+        : out.multiplier === 1 ? 'Пара, ставка вернулась'
+        : `Мимо, −${out.bet} 🪙`;
       if (out.multiplier > 1) machine.classList.add('won');
       showOutcome(status, text, out.result);
       haptic(out.result === 'wins' ? 'win' : out.result === 'losses' ? 'lose' : 'tap');
       setCoins(out.profile);
       picker.refresh();
     } catch (e) {
-      status.textContent = 'Выберите ставку и дёргайте рычаг';
+      status.textContent = 'Выберите ставку';
       toast(e.message);
     } finally {
       clearInterval(ticker);
@@ -2166,8 +2198,8 @@ GAMES.plinko = function (root) {
   const [canvas, g] = hiDpiCanvas(width, height);
   canvas.className = 'plinko-board';
   root.appendChild(canvas);
-  const status = statusLine(root, 'Бросайте шарики — можно по несколько сразу');
-  hintLine(root, 'Шарик отскакивает от штырьков и падает в лунку: на её число умножается ставка');
+  const status = statusLine(root, 'Выберите ставку');
+  hintLine(root, 'Ставка умножается на число лунки, куда упал шарик');
   const picker = betPicker(root);
   const balls = [];
   const glow = {};
@@ -2231,7 +2263,7 @@ GAMES.plinko = function (root) {
     if (newest.profile) setCoins(newest.profile);
     picker.refresh();
     const profit = ball.win - ball.bet;
-    const text = `${ball.mult}× → ` + (profit > 0 ? `+${profit} 🪙` : profit === 0 ? 'ставка вернулась' : `−${-profit} 🪙`);
+    const text = `${ball.mult}×: ` + (profit > 0 ? `+${profit} 🪙` : profit === 0 ? 'ставка вернулась' : `−${-profit} 🪙`);
     showOutcome(status, text, profit > 0 ? 'wins' : profit < 0 ? 'losses' : 'draws');
     if (ball.mult >= 5) haptic('win');
     else sound(ball.mult > 1 ? 'coin' : 'stop');
@@ -2253,7 +2285,7 @@ GAMES.plinko = function (root) {
   }
 
   async function drop() {
-    if (balls.length >= MAX_BALLS) return toast('Дождитесь, пока упадут шарики');
+    if (balls.length >= MAX_BALLS) return toast('Подождите, пока упадут шарики');
     const seq = ++sent;
     try {
       const out = await action('luck', { game: 'plinko', bet: picker.get() });
@@ -2266,7 +2298,7 @@ GAMES.plinko = function (root) {
     }
   }
 
-  root.insertBefore(button('🔵 Бросить шарик', 'btn wide', drop), picker.el);
+  root.insertBefore(button('Бросить шарик', 'btn wide', drop, 'arrow-down'), picker.el);
   bindKeys({ ' ': drop, Enter: drop });
   draw(performance.now());
   return () => { if (raf) cancelAnimationFrame(raf); };
@@ -2295,7 +2327,7 @@ GAMES.synth = function (root) {
   function paint() {
     wheel.style.setProperty('--win', (360 * RTP / mult) + 'deg');
     hub.textContent = mult + '×';
-    chance.textContent = `Шанс ${(RTP / mult * 100).toFixed(1)}% · ставка × ${mult}`;
+    chance.textContent = `Шанс ${(RTP / mult * 100).toFixed(1)}%`;
     chips.innerHTML = '';
     MULTS.forEach(m => {
       const chip = button(m + '×', 'chip' + (m === mult ? ' on' : ''), () => {
@@ -2321,12 +2353,12 @@ GAMES.synth = function (root) {
     raf = requestAnimationFrame(step);
   }
 
-  const spin = button('🌀 Запустить синтез', 'btn wide', async () => {
+  const spin = button('Запустить', 'btn wide', async () => {
     if (busy) return;
     busy = true;
     spin.disabled = true;
     status.classList.remove('win', 'lose');
-    status.textContent = 'Синтез…';
+    status.textContent = '';
     try {
       const out = await action('luck', { game: 'synth', bet: picker.get(), multiplier: mult });
       // Точка out.angle колеса должна встать под стрелку сверху
@@ -2338,7 +2370,7 @@ GAMES.synth = function (root) {
       await sleep(duration + 80);
       const won = out.win > 0;
       stage.classList.toggle('won', won);
-      showOutcome(status, won ? `🎉 Синтез удался! +${out.win - out.bet} 🪙` : `💨 Мимо сектора — −${out.bet} 🪙`,
+      showOutcome(status, won ? `Попали: +${out.win - out.bet} 🪙` : `Мимо, −${out.bet} 🪙`,
         won ? 'wins' : 'losses');
       haptic(won ? 'win' : 'lose');
       setCoins(out.profile);
@@ -2368,10 +2400,11 @@ GAMES.rocket = function (root) {
   const big = el('div', 'rocket-x', '1.00×');
   sky.appendChild(big);
   root.appendChild(sky);
-  const status = statusLine(root, 'Поставьте монеты и запускайте');
-  hintLine(root, 'Множитель растёт, пока ракета летит. Успейте забрать до взрыва');
+  const status = statusLine(root, 'Выберите ставку');
+  hintLine(root, 'Множитель растёт, пока ракета летит. Заберите выигрыш до взрыва');
   const picker = betPicker(root);
   const stars = Array.from({ length: 34 }, () => [Math.random() * width, Math.random() * height, Math.random() * 1.4 + 0.3]);
+  if (document.fonts) document.fonts.load('900 24px "Font Awesome 7 Free"', '\uf135').catch(() => {});
   let round = null, t0 = 0, raf = null, poll = null, busy = false, finalX = null;
 
   const multAt = t => Math.floor(100 * Math.exp(round.rate * Math.max(0, t))) / 100;
@@ -2398,18 +2431,20 @@ GAMES.rocket = function (root) {
     }
     g.stroke();
     const x = px(t), y = py(m);
-    g.font = '30px sans-serif';
+    // Ракета и взрыв — глифы Font Awesome (fa-rocket, fa-burst)
+    g.font = '900 24px "Font Awesome 7 Free"';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
+    g.fillStyle = state === 'crashed' ? '#ef6a5c' : '#fff';
     if (state === 'crashed') {
-      g.fillText('💥', x, y);
+      g.fillText('\ue4dc', x, y);
     } else {
       g.save();
       g.translate(x, y);
-      // 🚀 нарисована носом вправо-вверх (−45°): доворачиваем её по касательной к кривой
+      // Значок смотрит вправо-вверх (−45°): доворачиваем его по касательной к кривой
       const back = Math.max(0, t - 0.3);
       g.rotate(Math.atan2(y - py(Math.exp(round.rate * back)), x - px(back)) + Math.PI / 4);
-      g.fillText('🚀', 0, 0);
+      g.fillText('\uf135', 0, 0);
       g.restore();
     }
   }
@@ -2436,7 +2471,7 @@ GAMES.rocket = function (root) {
       finalX = null;
       t0 = performance.now() - view.elapsed * 1000;
       sky.className = 'rocket-wrap flying';
-      main.textContent = '💰 Забрать';
+      setLabel(main, 'hand-holding-dollar', 'Забрать');
       main.classList.add('cashout');
       picker.el.hidden = true;
       if (!poll) poll = setInterval(check, 700);
@@ -2448,17 +2483,17 @@ GAMES.rocket = function (root) {
     sky.className = 'rocket-wrap ' + view.status;
     frame();
     if (view.status === 'cashed') {
-      showOutcome(status, `💰 Забрали на ${view.cashed.toFixed(2)}× · +${view.win - view.bet} 🪙\nРакета взорвалась бы на ${view.crash.toFixed(2)}×`,
+      showOutcome(status, `Забрали на ${view.cashed.toFixed(2)}×: +${view.win - view.bet} 🪙\nВзрыв был бы на ${view.crash.toFixed(2)}×`,
         view.win > view.bet ? 'wins' : 'draws');
       sound('coin');
     } else {
-      showOutcome(status, `💥 Взрыв на ${view.crash.toFixed(2)}× · −${view.bet} 🪙`, 'losses');
+      showOutcome(status, `Взрыв на ${view.crash.toFixed(2)}×, −${view.bet} 🪙`, 'losses');
       sound('bang');
       haptic('lose');
       replay(sky, 'shake');
     }
     status.style.whiteSpace = 'pre-line';
-    main.textContent = '🚀 Запустить снова';
+    setLabel(main, 'rocket', 'Запустить');
     main.classList.remove('cashout');
     picker.el.hidden = false;
     picker.refresh();
@@ -2479,7 +2514,7 @@ GAMES.rocket = function (root) {
     try { await send('status'); } catch (e) { /* связь мигнула — спросим ещё раз */ }
   }
 
-  const main = button('🚀 Запустить', 'btn wide', async () => {
+  const main = button('Запустить', 'btn wide', async () => {
     if (busy) return;
     busy = true;
     try {
@@ -2487,7 +2522,7 @@ GAMES.rocket = function (root) {
         await send('cashout');
       } else {
         status.classList.remove('win', 'lose');
-        status.textContent = 'Летим!';
+        status.textContent = '';
         sound('launch');
         await send('start');
       }
@@ -2497,6 +2532,7 @@ GAMES.rocket = function (root) {
       busy = false;
     }
   });
+  setLabel(main, 'rocket', 'Запустить');
   root.insertBefore(main, picker.el);
   bindKeys({ ' ': () => main.click(), Enter: () => main.click() });
   // Полёт, начатый до закрытия приложения, продолжается
@@ -2510,8 +2546,8 @@ GAMES.rocket = function (root) {
 GAMES.roulette = function (root) {
   const CHAMBERS = 6;
   const table = el('div', 'rr-table');
-  const you = el('div', 'rr-seat', '🙂 Вы');
-  const botSeat = el('div', 'rr-seat', '🤖 Бот');
+  const you = setLabel(el('div', 'rr-seat'), 'user', 'Вы');
+  const botSeat = setLabel(el('div', 'rr-seat'), 'robot', 'Бот');
   const drum = el('div', 'rr-drum');
   const chambers = Array.from({ length: CHAMBERS }, (_, i) => {
     const c = el('i', 'rr-chamber');
@@ -2523,8 +2559,8 @@ GAMES.roulette = function (root) {
   table.appendChild(drum);
   table.appendChild(botSeat);
   root.appendChild(table);
-  const status = statusLine(root, 'Один патрон, шесть гнёзд. Стреляете первым');
-  hintLine(root, 'Патрон достался боту — забираете ×2. Шансы ровно 50 на 50');
+  const status = statusLine(root, 'Шесть гнёзд, один патрон');
+  hintLine(root, 'Вы стреляете первым. Если патрон достанется боту, ставка удвоится. Шансы 50 на 50');
   const picker = betPicker(root);
   let round = null, busy = false;
 
@@ -2541,7 +2577,7 @@ GAMES.roulette = function (root) {
   async function animateShot(shot) {
     seat(shot.who);
     if (shot.who === 'bot') {
-      status.textContent = '🤖 Бот берёт револьвер…';
+      status.textContent = 'Стреляет бот…';
       await sleep(900);
     }
     const index = round.shotsDone++;
@@ -2556,7 +2592,7 @@ GAMES.roulette = function (root) {
     }
     sound('click');
     thud();
-    status.textContent = shot.who === 'you' ? '*щёлк* — пусто. Ход бота' : '*щёлк* — бот выдыхает. Ваш ход';
+    status.textContent = shot.who === 'you' ? 'Щёлк. Пусто' : 'Щёлк. Бот цел, ваш ход';
   }
 
   async function render(view, shots) {
@@ -2565,18 +2601,18 @@ GAMES.roulette = function (root) {
     actions.innerHTML = '';
     if (view.status === 'playing') {
       seat('you');
-      if (!shots.length) status.textContent = 'Ваш ход — жмите на курок';
+      if (!shots.length) status.textContent = 'Ваш ход';
       picker.el.hidden = true;
-      actions.appendChild(button('🔫 Нажать на курок', 'btn wide danger', () => send({ action: 'pull' })));
+      actions.appendChild(button('Нажать на курок', 'btn wide danger', () => send({ action: 'pull' }), 'gun'));
       return;
     }
     seat(null);
     const won = view.result === 'wins';
-    showOutcome(status, won ? `💥 Патрон достался боту! +${view.bet} 🪙` : `💥 Не повезло — −${view.bet} 🪙`, view.result);
+    showOutcome(status, won ? `Патрон достался боту: +${view.bet} 🪙` : `Патрон достался вам, −${view.bet} 🪙`, view.result);
     haptic(won ? 'win' : 'lose');
     picker.el.hidden = false;
     picker.refresh();
-    actions.appendChild(button('🔄 Зарядить снова', 'btn wide', () => send({ action: 'start', bet: picker.get() })));
+    actions.appendChild(button('Ещё раз', 'btn wide', () => send({ action: 'start', bet: picker.get() })));
   }
 
   async function send(body) {
@@ -2602,8 +2638,8 @@ GAMES.roulette = function (root) {
 
   const actions = el('div');
   root.insertBefore(actions, picker.el);
-  actions.appendChild(button('🔫 Зарядить револьвер', 'btn wide', () => send({ action: 'start', bet: picker.get() })));
-  root.appendChild(button('👥 Сыграть с другом в чате', 'btn wide secondary', () => openChatGame('Русская рулетка', 'рулетка')));
+  actions.appendChild(button('Зарядить', 'btn wide', () => send({ action: 'start', bet: picker.get() })));
+  root.appendChild(button('Играть с другом в чате', 'btn wide secondary', () => openChatGame('Русская рулетка', 'рулетка'), 'users'));
 };
 
 /* Wordle */
