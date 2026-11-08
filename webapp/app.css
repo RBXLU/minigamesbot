@@ -938,3 +938,264 @@ body.with-tabs main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ======================= 3.0: новые игры на удачу, настройки, виды интерфейса ======================= */
+
+.shake { animation: shake .4s ease; }
+.btn.danger { background: var(--bad); box-shadow: 0 4px 12px color-mix(in srgb, var(--bad) 30%, transparent); }
+.prize-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.prize-row span {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* блиц-реакция: большая площадка, цвет подсказывает, можно ли жать */
+.reaction-pad {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 210px;
+  margin-top: 6px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font: 800 26px/1.2 var(--font);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  transition: background .12s, transform .12s;
+}
+.reaction-pad:active { transform: scale(.98); }
+.reaction-pad[data-phase="wait"] { background: var(--bad); }
+.reaction-pad[data-phase="go"] { background: var(--good); animation: pop .2s var(--ease); }
+
+/* слоты: корпус автомата, лампочки и три барабана с линией выплаты */
+.slot-machine {
+  position: relative;
+  margin: 6px auto 0;
+  max-width: 360px;
+  padding: 14px 14px 16px;
+  border-radius: 26px;
+  background: linear-gradient(180deg, #7a1d2a, #4a0f19);
+  box-shadow: inset 0 0 0 3px #e9b44c, inset 0 0 0 7px #4a0f19, 0 10px 26px rgba(0, 0, 0, .35);
+}
+.slot-machine::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 22px;
+  background: radial-gradient(circle, #ffe08a 0 2.5px, transparent 3.5px) 0 0 / 18px 18px;
+  opacity: .55;
+  pointer-events: none;
+  /* лампочки только по краю: середину вырезает маска */
+  padding: 4px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.slot-machine.spinning::before { animation: bulbs .5s steps(2) infinite; }
+.slot-machine.won::before { animation: bulbs .25s steps(2) infinite; opacity: 1; }
+@keyframes bulbs { 50% { opacity: .15; } }
+.slot-title {
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: .14em;
+  font-size: 15px;
+  color: #ffd76b;
+  text-shadow: 0 0 10px rgba(255, 200, 80, .6);
+  margin: 4px 0 10px;
+}
+.slot-window {
+  --sym: 66px;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 6px;
+  border-radius: 16px;
+  background: #1b0b0f;
+}
+.slot-reel {
+  height: calc(var(--sym) * 3);
+  overflow: hidden;
+  border-radius: 11px;
+  background: linear-gradient(180deg, #cfc6b8, #fffaf1 30%, #fffaf1 70%, #cfc6b8);
+  box-shadow: inset 0 8px 12px rgba(0, 0, 0, .35), inset 0 -8px 12px rgba(0, 0, 0, .35);
+}
+.slot-strip { will-change: transform; }
+.slot-sym {
+  height: var(--sym);
+  display: grid;
+  place-items: center;
+  font-size: 40px;
+  line-height: 1;
+}
+.slot-line {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  height: calc(var(--sym) + 4px);
+  transform: translateY(-50%);
+  border: 2px solid rgba(255, 215, 107, .75);
+  border-radius: 10px;
+  pointer-events: none;
+}
+.slot-machine.won .slot-line { border-color: #ffd76b; box-shadow: 0 0 16px rgba(255, 215, 107, .9); animation: flash .5s var(--ease) 3; }
+.slot-pays { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 12px; font-size: 12.5px; color: var(--muted); }
+.slot-pays b { color: var(--warn); }
+.btn.slot-spin { background: linear-gradient(180deg, #f0b63e, #d98a1c); color: #2a1503; font-size: 17px; letter-spacing: .02em; }
+
+/* плинко */
+canvas.plinko-board, canvas.rocket-sky { background: transparent; border: 0; }
+canvas.plinko-board { margin-top: 4px; }
+
+/* синтез: колесо с выигрышным сектором и стрелкой сверху */
+.wheel-stage { position: relative; width: min(280px, 78vw); aspect-ratio: 1; margin: 10px auto 4px; }
+.wheel {
+  --win: 171deg;
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    repeating-conic-gradient(rgba(0, 0, 0, .18) 0 1deg, transparent 1deg 15deg),
+    conic-gradient(var(--good) 0 var(--win), color-mix(in srgb, var(--accent) 22%, var(--card-2)) var(--win) 360deg);
+  box-shadow: 0 0 0 6px var(--card), 0 0 0 8px var(--line), 0 10px 28px rgba(0, 0, 0, .3);
+}
+.wheel-stage.won .wheel { box-shadow: 0 0 0 6px var(--card), 0 0 0 8px var(--good), 0 0 30px color-mix(in srgb, var(--good) 60%, transparent); }
+.wheel-pointer {
+  position: absolute;
+  left: 50%;
+  top: -10px;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border: 12px solid transparent;
+  border-top: 22px solid var(--warn);
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .4));
+  z-index: 2;
+}
+.wheel-hub {
+  position: absolute;
+  inset: 34%;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--card);
+  border: 2px solid var(--line);
+  font-size: 26px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ракетка */
+.rocket-wrap {
+  position: relative;
+  max-width: 380px;
+  margin: 4px auto 0;
+  border-radius: 18px;
+  overflow: hidden;
+  background: radial-gradient(120% 90% at 20% 110%, #2b2f6b, #0b0f24 70%);
+  border: 1px solid var(--line);
+}
+.rocket-wrap.crashed { background: radial-gradient(120% 90% at 50% 50%, #5a1a1a, #160909 70%); }
+.rocket-wrap.cashed { background: radial-gradient(120% 90% at 20% 110%, #1d5a42, #08190f 70%); }
+.rocket-x {
+  position: absolute;
+  top: 14px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 40px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .5);
+  pointer-events: none;
+}
+.rocket-wrap.crashed .rocket-x { color: #ff8a7a; }
+.rocket-wrap.cashed .rocket-x { color: #7ff0b8; }
+.btn.cashout { background: var(--good); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { transform: scale(1.02); } }
+
+/* русская рулетка: барабан на 6 гнёзд поворачивается на гнездо за выстрел */
+.rr-table { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
+.rr-seat {
+  flex: 1;
+  text-align: center;
+  padding: 12px 6px;
+  border-radius: 16px;
+  background: var(--card);
+  border: 2px solid var(--line);
+  font-weight: 800;
+  transition: border-color .2s, transform .2s;
+}
+.rr-seat.turn { border-color: var(--warn); transform: scale(1.05); }
+.rr-drum {
+  --turn: 0;
+  position: relative;
+  flex: 0 0 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #555c66 0 14px, #2b3038 15px 58%, #1c2026 59%);
+  box-shadow: inset 0 0 0 4px #3d434c, 0 8px 20px rgba(0, 0, 0, .35);
+  transform: rotate(calc(var(--turn) * -60deg));
+  transition: transform .5s cubic-bezier(.3, 1.4, .5, 1);
+}
+.rr-chamber {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  margin: -14px;
+  border-radius: 50%;
+  background: #0d0f12;
+  box-shadow: inset 0 3px 6px rgba(0, 0, 0, .8);
+  transform: rotate(calc(var(--i) * 60deg)) translateY(-40px);
+}
+.rr-chamber.empty { background: #3b4048; }
+.rr-chamber.fired { background: radial-gradient(circle, #ffd76b, #ef6a5c 60%, #6b1d14); box-shadow: 0 0 14px #ef6a5c; }
+
+.field.setting { margin: 4px 0 20px; }
+.field.setting .seg { margin: 2px 0 0; }
+
+/* ---------- виды интерфейса (Настройки → Оформление) ---------- */
+
+/* Компакт: игры списком в одну колонку */
+:root[data-ui="compact"] .grid { grid-template-columns: 1fr; gap: 6px; }
+:root[data-ui="compact"] .tile { min-height: 52px; padding: 8px 12px; border-radius: 14px; font-size: 14.5px; }
+:root[data-ui="compact"] .tile .emoji { flex-basis: 34px; width: 34px; height: 34px; font-size: 19px; border-radius: 11px; }
+:root[data-ui="compact"] .tile .played { display: inline; margin: 0 0 0 8px; }
+:root[data-ui="compact"] .panel { padding: 12px; }
+:root[data-ui="compact"] .section-title { margin-top: 18px; font-size: 16px; }
+:root[data-ui="compact"] .hero { margin-bottom: 10px; }
+:root[data-ui="compact"] .stat { padding: 8px 6px; }
+:root[data-ui="compact"] .stat b { font-size: 17px; }
+
+/* Аркада: крупные яркие карточки, эмодзи сверху */
+:root[data-ui="arcade"] { --radius: 24px; }
+:root[data-ui="arcade"] .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+:root[data-ui="arcade"][data-device="desktop"] .grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+:root[data-ui="arcade"] .tile {
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+  min-height: 132px;
+  gap: 8px;
+  font-size: 15.5px;
+  border: 0;
+  color: #fff;
+  background: linear-gradient(155deg, color-mix(in srgb, var(--tint) 88%, #fff), color-mix(in srgb, var(--tint) 70%, #000));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--tint) 35%, transparent);
+}
+:root[data-ui="arcade"] .tile .emoji { flex-basis: 54px; width: 54px; height: 54px; font-size: 32px; border-radius: 50%; background: rgba(255, 255, 255, .22); }
+:root[data-ui="arcade"] .tile .played { color: rgba(255, 255, 255, .82); }
+:root[data-ui="arcade"] .section-title { font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
+:root[data-ui="arcade"] .btn { border-radius: 18px; text-transform: uppercase; letter-spacing: .03em; }
+:root[data-ui="arcade"] .panel { background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 18%, var(--card)), var(--card)); }

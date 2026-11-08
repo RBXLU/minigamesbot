@@ -8,7 +8,7 @@ const pumpkinsEl = document.getElementById('pumpkins');
 const tabsEl = document.getElementById('tabs');
 const backEl = document.getElementById('back');
 const toastEl = document.getElementById('toast');
-const layoutToggleEl = document.getElementById('layout-toggle');
+const settingsBtnEl = document.getElementById('settings-btn');
 
 let CFG = null;
 let PROFILE = null;
@@ -179,8 +179,6 @@ function storedLayout() {
 
 function setLayout(mode, remember) {
   document.documentElement.setAttribute('data-device', mode);
-  layoutToggleEl.textContent = mode === 'mobile' ? '🖥' : '📱';
-  layoutToggleEl.title = mode === 'mobile' ? 'Раскладка для широкого экрана' : 'Мобильная раскладка';
   if (remember) {
     try { localStorage.setItem(LAYOUT_KEY, mode); } catch (e) { /* приватный режим */ }
   }
@@ -190,12 +188,9 @@ function currentLayout() {
   return document.documentElement.getAttribute('data-device') || 'mobile';
 }
 
-layoutToggleEl.addEventListener('click', () => {
-  const next = currentLayout() === 'mobile' ? 'desktop' : 'mobile';
-  setLayout(next, true);
+settingsBtnEl.addEventListener('click', () => {
   haptic('tap');
-  toast(next === 'mobile' ? 'Мобильная раскладка' : 'Раскладка для широкого экрана', 1400);
-  if (currentScreen) currentScreen();
+  openSettings();
 });
 
 /** Подгоняет высоту под окно Telegram и учитывает вырезы экрана. */
@@ -266,7 +261,85 @@ function toast(text, ms) {
   toast._t = setTimeout(() => { toastEl.hidden = true; }, ms || 1800);
 }
 
+/* ---------- настройки и звуки ---------- */
+
+// Настройки живут на устройстве: звук на телефоне и на компьютере бывает нужен разный.
+// Только язык хранится на сервере — он общий с ботом.
+const SETTINGS_KEY = 'minigames:settings';
+const SETTINGS = Object.assign({ volume: 2, haptics: true, ui: 'classic' }, readStored(SETTINGS_KEY));
+
+function readStored(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || {}; } catch (e) { return {}; }
+}
+
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (e) { /* приватный режим */ }
+}
+
+// Звуки синтезирует WebAudio на лету: файлов качать не нужно.
+// [частота, длительность, форма, громкость, задержка, частота в конце]
+const SOUNDS = {
+  tap: [[540, 0.04, 'triangle', 0.1]],
+  win: [[523, 0.12, 'triangle'], [659, 0.12, 'triangle', 0.25, 0.1], [784, 0.12, 'triangle', 0.25, 0.2], [1047, 0.32, 'triangle', 0.25, 0.3]],
+  lose: [[330, 0.18, 'sawtooth', 0.12], [220, 0.34, 'sawtooth', 0.12, 0.16]],
+  tick: [[1500, 0.022, 'square', 0.05]],
+  stop: [[150, 0.09, 'square', 0.18]],
+  coin: [[988, 0.07, 'square', 0.1], [1319, 0.18, 'square', 0.1, 0.07]],
+  click: [[95, 0.06, 'square', 0.3]],
+  peg: [[1800, 0.03, 'sine', 0.08]],
+  launch: [[180, 0.6, 'sawtooth', 0.08, 0, 720]],
+  bang: [[0, 0.7, 'noise', 0.6]]
+};
+const VOLUME = [0, 0.35, 0.7, 1];
+let audioCtx = null;
+let noiseBuffer = null;
+const lastSound = {};
+
+function sound(name) {
+  const level = VOLUME[SETTINGS.volume] || 0;
+  if (!level || !SOUNDS[name]) return;
+  const now = performance.now();
+  if (now - (lastSound[name] || 0) < 60) return;          // один звук на два одинаковых события
+  lastSound[name] = now;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    SOUNDS[name].forEach(([freq, dur, type, gain, delay, to]) => {
+      const t = audioCtx.currentTime + (delay || 0);
+      const amp = audioCtx.createGain();
+      amp.gain.setValueAtTime((gain || 0.25) * level, t);
+      amp.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      amp.connect(audioCtx.destination);
+      let src;
+      if (type === 'noise') {
+        if (!noiseBuffer) {
+          noiseBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
+          const data = noiseBuffer.getChannelData(0);
+          for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        }
+        src = audioCtx.createBufferSource();
+        src.buffer = noiseBuffer;
+      } else {
+        src = audioCtx.createOscillator();
+        src.type = type || 'sine';
+        src.frequency.setValueAtTime(freq, t);
+        if (to) src.frequency.exponentialRampToValueAtTime(to, t + dur);
+      }
+      src.connect(amp);
+      src.start(t);
+      src.stop(t + dur + 0.02);
+    });
+  } catch (e) { /* звук недоступен — играем молча */ }
+}
+
+/** Короткий толчок без звука: барабан встал, шарик ударился о штырёк. */
+function thud() {
+  try { if (SETTINGS.haptics && tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('rigid'); } catch (e) { /* нет вибрации */ }
+}
+
 function haptic(type) {
+  sound(type === 'win' || type === 'lose' ? type : 'tap');
+  if (!SETTINGS.haptics) return;
   try {
     if (!tg || !tg.HapticFeedback) return;
     if (type === 'win') tg.HapticFeedback.notificationOccurred('success');
@@ -305,6 +378,8 @@ function action(name, body) {
 
 const ERRORS = {
   'too fast': 'Слишком быстро — подождите пару секунд',
+  'no active round': 'Этот раунд уже закончился',
+  'bad multiplier': 'Такого множителя нет',
   'server error': 'Что-то пошло не так — попробуйте ещё раз',
   'not enough coins': 'Монет пока не хватает — сыграйте пару партий',
   'not enough pumpkins': 'Тыкв пока не хватает',
@@ -1258,7 +1333,7 @@ function buildProfile(root) {
     root.appendChild(button('🛡 Админка', 'btn wide secondary', () => openAdmin()));
   }
 
-  sectionTitle(root, 'Ваши рекорды', 'Нажмите на игру, чтобы увидеть лучших за неделю');
+  sectionTitle(root, 'Ваши рекорды', 'Первые трое за неделю получают монеты — нажмите на игру, чтобы увидеть топ');
   const records = el('div', 'list');
   Object.entries(RECORD_GAMES).forEach(([key, name]) => {
     const row = el('button', 'list-row');
@@ -1298,10 +1373,16 @@ function openRecords(game, name) {
       head.appendChild(el('div', 'bar-label', 'Ваш рекорд: ' + (data.best != null ? data.best + ' ' + data.unit : '—')));
       head.appendChild(el('div', 'hint', 'Лучший за неделю: ' + (data.week_best != null ? data.week_best + ' ' + data.unit : '—')));
       root.appendChild(head);
+      const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
+      if (data.prizes) {
+        const prizes = el('div', 'prize-row');
+        data.prizes.forEach((coins, i) => prizes.appendChild(el('span', null, medals[i + 1] + ' ' + coins + ' 🪙')));
+        sectionTitle(root, 'Награды недели', 'В понедельник первые трое получают монеты на баланс');
+        root.appendChild(prizes);
+      }
       sectionTitle(root, 'Лучшие за неделю');
       const list = el('div', 'list');
       if (!data.top.length) list.appendChild(el('div', 'list-row', 'На этой неделе здесь пусто — займите первое место!'));
-      const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
       data.top.forEach(row => {
         const item = el('div', 'list-row' + (row.me ? ' me' : ''));
         item.appendChild(el('span', null, (medals[row.place] || row.place + '.') + ' ' + row.name));
@@ -1309,9 +1390,105 @@ function openRecords(game, name) {
         list.appendChild(item);
       });
       root.appendChild(list);
+      if (data.last_winners && data.last_winners.length) {
+        sectionTitle(root, 'Победители прошлой недели');
+        const past = el('div', 'list');
+        data.last_winners.forEach(row => {
+          const item = el('div', 'list-row');
+          item.appendChild(el('span', null, medals[row.place] + ' ' + row.name));
+          item.appendChild(el('b', null, row.score + ' ' + data.unit + ' · +' + row.prize + ' 🪙'));
+          past.appendChild(item);
+        });
+        root.appendChild(past);
+      }
       root.appendChild(button('▶️ Попробовать побить', 'btn wide', () => openGame(game, name)));
     }).catch(e => { status.textContent = e.message; });
   });
+}
+
+/* ---------- настройки ---------- */
+
+const UI_STYLES = {
+  classic: 'Плитки с эмодзи, как раньше',
+  compact: 'Список в одну колонку: больше игр на экране',
+  arcade: 'Крупные яркие карточки в две колонки'
+};
+
+function applyUiStyle() {
+  document.documentElement.setAttribute('data-ui', UI_STYLES[SETTINGS.ui] ? SETTINGS.ui : 'classic');
+}
+
+/** Переключатель из нескольких вариантов. */
+function segmented(options, current, onPick) {
+  const seg = el('div', 'seg');
+  seg.style.gridTemplateColumns = `repeat(${options.length}, 1fr)`;
+  options.forEach(([value, label]) => {
+    const b = el('button', 'seg-btn' + (value === current ? ' on' : ''), label);
+    b.addEventListener('click', () => {
+      seg.querySelectorAll('.seg-btn').forEach(other => other.classList.toggle('on', other === b));
+      onPick(value);
+      haptic('tap');
+    });
+    seg.appendChild(b);
+  });
+  return seg;
+}
+
+function openSettings() {
+  openScreen('Настройки', true, buildSettings);
+}
+
+/** Как field(), но без <label>: щелчок по подписи не должен нажимать первую кнопку. */
+function settingRow(labelText, control, hint) {
+  const wrap = el('div', 'field setting');
+  wrap.appendChild(el('span', 'field-label', labelText));
+  wrap.appendChild(control);
+  if (hint) wrap.appendChild(el('span', 'field-hint', hint));
+  return wrap;
+}
+
+function buildSettings(root) {
+  const set = (key, value) => { SETTINGS[key] = value; saveSettings(); };
+  root.appendChild(settingRow('🔊 Звук', segmented(
+    [[0, 'Выкл'], [1, 'Тихо'], [2, 'Средне'], [3, 'Громко']], SETTINGS.volume,
+    value => { set('volume', value); sound('coin'); }),
+    'Щелчки кнопок, барабаны, выигрыш и взрыв ракеты'));
+  root.appendChild(settingRow('📳 Вибрация', segmented(
+    [[true, 'Вкл'], [false, 'Выкл']], SETTINGS.haptics, value => set('haptics', value))));
+
+  const lang = PROFILE && PROFILE.lang ? PROFILE.lang : I18N.lang;
+  root.appendChild(settingRow('🌍 Язык', segmented(
+    [['ru', 'Русский'], ['en', 'English'], ['uk', 'Українська']], lang, async value => {
+      try {
+        setCoins((await action('settings', { op: 'lang', lang: value })).profile);
+      } catch (e) {
+        await loadLang(value);                // без входа через Telegram — хотя бы на экране
+      }
+    }), 'Язык общий с ботом: сменится и в чате'));
+
+  const styleHint = el('div', 'field-hint', UI_STYLES[SETTINGS.ui] || UI_STYLES.classic);
+  const styleField = settingRow('🎨 Оформление', segmented(
+    [['classic', 'Классика'], ['compact', 'Компакт'], ['arcade', 'Аркада']], SETTINGS.ui, value => {
+      set('ui', value);
+      applyUiStyle();
+      styleHint.textContent = UI_STYLES[value];
+    }));
+  styleField.appendChild(styleHint);
+  root.appendChild(styleField);
+
+  root.appendChild(settingRow('🖥 Раскладка', segmented(
+    [['mobile', '📱 Телефон'], ['desktop', '🖥 Широкий экран']], currentLayout(),
+    value => setLayout(value, true)), 'Широкий экран — управление с клавиатуры'));
+
+  const bot = CFG && CFG.bot_username;
+  if (bot) {
+    sectionTitle(root, 'Как открыть приложение', 'Кнопка «Играть» в чате, кнопка «Открыть» в профиле бота или ссылка');
+    root.appendChild(button('📤 Поделиться ссылкой на игры', 'btn wide secondary', () => {
+      const link = `https://t.me/${bot}?startapp`;
+      openLink('https://t.me/share/url?url=' + encodeURIComponent(link) +
+        '&text=' + encodeURIComponent('Заходи поиграть в мини-игры 🎮'));
+    }));
+  }
 }
 
 /* ---------- магазин ---------- */
@@ -1814,83 +1991,619 @@ GAMES.guess = function (root, ctx) {
 
 /* Блиц-реакция */
 GAMES.reaction = function (root, ctx) {
-  let armed = false, startAt = 0, timer = null;
+  // Одно состояние на одну кнопку: idle → wait (рано жать) → go (жать!) → idle
+  let phase = 'idle', startAt = 0, timer = null;
   const status = statusLine(root, 'Нажмите «Старт» и ждите сигнала');
-  const pad = button('▶️ Старт', 'btn wide', start);
+  const pad = el('button', 'reaction-pad', '▶️ Старт');
   root.appendChild(pad);
 
-  function start() {
-    if (timer) return;
-    armed = false;
-    pad.textContent = '⏳ Ждите...';
-    status.textContent = 'Терпение… сигнал будет внезапно';
-    timer = setTimeout(() => {
-      timer = null;
-      armed = true;
-      startAt = Date.now();
-      pad.textContent = '⚡ ЖМИ!';
-      status.textContent = 'Сигнал!';
-      haptic('tap');
-    }, 1500 + randInt(3500));
+  function setPhase(next, label, text) {
+    phase = next;
+    pad.textContent = label;
+    pad.dataset.phase = next;
+    if (text !== undefined) status.textContent = text;
   }
 
-  pad.addEventListener('click', () => {
-    if (timer) {
+  function press() {
+    if (phase === 'idle') {
+      haptic('tap');
+      setPhase('wait', '⏳ Ждите…', 'Терпение… сигнал будет внезапно');
+      status.classList.remove('win', 'lose');
+      timer = setTimeout(() => {
+        timer = null;
+        startAt = performance.now();
+        setPhase('go', '⚡ ЖМИ!', 'Сигнал!');
+        sound('coin');
+      }, 1500 + randInt(3500));
+    } else if (phase === 'wait') {
       clearTimeout(timer);
       timer = null;
-      pad.textContent = '▶️ Старт';
-      status.textContent = '😅 Рано! Попробуйте снова';
+      setPhase('idle', '🔁 Ещё раз');
+      showOutcome(status, '😅 Рано! Дождитесь сигнала', 'losses');
+      haptic('lose');
       ctx.finish('losses');
-      return;
+    } else if (phase === 'go') {
+      const ms = Math.round(performance.now() - startAt);
+      const result = ms < 400 ? 'wins' : 'draws';
+      setPhase('idle', '🔁 Ещё раз');
+      showOutcome(status, `⚡ ${ms} мс` + (ms < 250 ? ' — молниеносно!' : ms < 400 ? ' — отлично!' : ''), result);
+      ctx.finish(result, { score: ms + ' мс' });
     }
-    if (!armed) return;
-    armed = false;
-    const ms = Date.now() - startAt;
-    showOutcome(status, `⚡ ${ms} мс`, ms < 400 ? 'wins' : null);
-    pad.textContent = '🔁 Ещё раз';
-    ctx.finish(ms < 400 ? 'wins' : 'draws', { score: ms + ' мс' });
-  });
+  }
 
-  bindKeys({ ' ': () => pad.click(), Enter: () => pad.click() });
+  // pointerdown срабатывает раньше click — честнее для замера
+  pad.addEventListener('pointerdown', event => { event.preventDefault(); press(); });
+  pad.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') event.preventDefault(); });
+  bindKeys({ ' ': press, Enter: press });
+  hintLine(root, 'Меньше 400 мс — победа. Лучшее время идёт в рекорды недели.');
   return () => { if (timer) clearTimeout(timer); };
 };
 
-/* Казино — барабаны крутит сервер */
+/* Слоты — комбинацию выбирает сервер, клиент только крутит барабаны */
 GAMES.slot = function (root) {
   const SYMBOLS = ['🍒', '🍋', '🍉', '⭐', '💎', '7️⃣'];
-  const reels = el('div', 'reels', '🎰 🎰 🎰');
-  root.appendChild(reels);
-  const status = statusLine(root, 'Выберите ставку');
-  hintLine(root, '7️⃣7️⃣7️⃣ — ×20 · три одинаковых — ×10 · пара — ставка возвращается');
-  const picker = betPicker(root);
-  let spinning = false;
+  const machine = el('div', 'slot-machine');
+  machine.appendChild(el('div', 'slot-title', '★ МИНИ-СЛОТЫ ★'));
+  const win = el('div', 'slot-window');
+  const strips = [0, 1, 2].map(() => {
+    const reel = el('div', 'slot-reel');
+    const strip = el('div', 'slot-strip');
+    reel.appendChild(strip);
+    win.appendChild(reel);
+    return strip;
+  });
+  win.appendChild(el('div', 'slot-line'));
+  machine.appendChild(win);
+  root.appendChild(machine);
 
-  root.appendChild(button('🎰 Крутить', 'btn wide', async () => {
+  const status = statusLine(root, 'Выберите ставку и дёргайте рычаг');
+  const pays = el('div', 'slot-pays');
+  [['7️⃣7️⃣7️⃣', '×20'], ['три одинаковых', '×10'], ['пара', 'ставка назад']].forEach(([combo, x]) => {
+    const item = el('span');
+    item.appendChild(el('b', null, x));
+    item.appendChild(document.createTextNode(' ' + combo));
+    pays.appendChild(item);
+  });
+  root.appendChild(pays);
+  const picker = betPicker(root);
+  let spinning = false, ticker = null;
+
+  function fill(strip, symbols) {
+    strip.innerHTML = '';
+    symbols.forEach(symbol => strip.appendChild(el('div', 'slot-sym', symbol)));
+  }
+  strips.forEach(strip => fill(strip, [pick(SYMBOLS), pick(SYMBOLS), pick(SYMBOLS)]));
+
+  /** Лента: сверху то, что остановится в окне, внизу то, что видно сейчас. Едет вниз. */
+  function spinReel(strip, target, index) {
+    const visible = Array.from(strip.children).slice(0, 3).map(n => n.textContent);
+    const filler = Array.from({ length: 14 + index * 5 }, () => pick(SYMBOLS));
+    fill(strip, [pick(SYMBOLS), target, pick(SYMBOLS)].concat(filler, visible));
+    const size = strip.firstChild.offsetHeight;
+    strip.style.transition = 'none';
+    strip.style.transform = `translateY(${-(strip.children.length - 3) * size}px)`;
+    void strip.offsetWidth;
+    const duration = REDUCED_MOTION ? 10 : 1100 + index * 420;
+    strip.style.transition = `transform ${duration}ms cubic-bezier(.15, .7, .25, 1.06)`;
+    strip.style.transform = 'translateY(0)';
+    return sleep(duration).then(() => {
+      // Длинная лента больше не нужна: оставляем три видимых символа
+      fill(strip, Array.from(strip.children).slice(0, 3).map(n => n.textContent));
+      strip.style.transition = 'none';
+      sound('stop');
+      thud();
+    });
+  }
+
+  const lever = button('🎰 Крутить', 'btn wide slot-spin', async () => {
     if (spinning) return;
     spinning = true;
-    reels.classList.add('spin');
-    const anim = setInterval(() => { reels.textContent = [0, 1, 2].map(() => pick(SYMBOLS)).join(' '); }, 70);
+    lever.disabled = true;
+    machine.classList.remove('won');
+    machine.classList.add('spinning');
+    status.classList.remove('win', 'lose');
+    status.textContent = 'Барабаны крутятся…';
     try {
-      const [out] = await Promise.all([action('luck', { game: 'slot', bet: picker.get() }), sleep(900)]);
-      clearInterval(anim);
-      reels.textContent = out.reels.join(' ');
+      const out = await action('luck', { game: 'slot', bet: picker.get() });
+      ticker = setInterval(() => sound('tick'), 85);
+      await Promise.all(strips.map((strip, i) => spinReel(strip, out.reels[i], i)));
+      clearInterval(ticker);
       const text = out.multiplier >= 20 ? `💰 ДЖЕКПОТ! +${out.win - out.bet} 🪙`
         : out.multiplier >= 10 ? `🎉 Три в ряд! +${out.win - out.bet} 🪙`
         : out.multiplier === 1 ? '✨ Пара — ставка вернулась'
         : `😢 Мимо — −${out.bet} 🪙`;
+      if (out.multiplier > 1) machine.classList.add('won');
       showOutcome(status, text, out.result);
       haptic(out.result === 'wins' ? 'win' : out.result === 'losses' ? 'lose' : 'tap');
       setCoins(out.profile);
       picker.refresh();
     } catch (e) {
-      clearInterval(anim);
-      reels.textContent = '🎰 🎰 🎰';
+      status.textContent = 'Выберите ставку и дёргайте рычаг';
       toast(e.message);
     } finally {
-      reels.classList.remove('spin');
+      clearInterval(ticker);
+      machine.classList.remove('spinning');
+      lever.disabled = false;
       spinning = false;
     }
-  }));
+  });
+  root.insertBefore(lever, picker.el);
+  bindKeys({ ' ': () => lever.click(), Enter: () => lever.click() });
+  return () => clearInterval(ticker);
+};
+
+/* ---------- холст и цвета для игр на удачу ---------- */
+
+/** Холст с учётом плотности пикселей: на телефоне иначе всё мыльное. */
+function hiDpiCanvas(width, height) {
+  const canvas = el('canvas');
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  const g = canvas.getContext('2d');
+  g.scale(ratio, ratio);
+  return [canvas, g];
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
+}
+
+/* Плинко — путь шарика выбирает сервер */
+GAMES.plinko = function (root) {
+  const ROWS = 10;
+  const MULTS = [25, 5, 2, 1.2, 0.6, 0.4, 0.6, 1.2, 2, 5, 25];
+  const STEP = 150;                       // мс на один ряд штырьков
+  const MAX_BALLS = 6;
+  const width = Math.min(screenEl.clientWidth - 28, 380);
+  const gap = width / (ROWS + 2);
+  const rowH = gap * 0.92;
+  const top = gap * 0.9;
+  const slotY = top + ROWS * rowH + 6;
+  const height = slotY + 34;
+  const [canvas, g] = hiDpiCanvas(width, height);
+  canvas.className = 'plinko-board';
+  root.appendChild(canvas);
+  const status = statusLine(root, 'Бросайте шарики — можно по несколько сразу');
+  hintLine(root, 'Шарик отскакивает от штырьков и падает в лунку: на её число умножается ставка');
+  const picker = betPicker(root);
+  const balls = [];
+  const glow = {};
+  let raf = null, sent = 0, newest = { seq: 0, profile: null };
+
+  // Шарик в ряду row, сделавший right отскоков вправо; штырёк под ним — тот же x
+  const xAt = (row, right) => width / 2 + (right - row / 2) * gap;
+  const slotColor = m => m >= 5 ? '#ef6a5c' : m >= 2 ? '#ff9a4d' : m > 1 ? '#f2b84b' : '#5d7fa8';
+
+  function ballPos(ball, now) {
+    const t = (now - ball.start) / STEP;
+    const r = gap * 0.22;                 // шарик лежит на штырьке, а не насквозь
+    if (t < 1) return [width / 2, top - r - gap * 0.8 * (1 - Math.max(0, t) ** 2)];  // падает на первый штырёк
+    const seg = Math.min(ROWS, Math.floor(t - 1));
+    const f = Math.min(1, t - 1 - seg);
+    const right = ball.path.slice(0, seg).reduce((a, b) => a + b, 0);
+    if (seg >= ROWS) return [xAt(ROWS, right), slotY - r];
+    const next = right + ball.path[seg];
+    const x0 = xAt(seg, right), x1 = xAt(seg + 1, next);
+    const y0 = top + seg * rowH, y1 = top + (seg + 1) * rowH;
+    // Отскок: чуть вверх, потом вниз к следующему ряду
+    return [x0 + (x1 - x0) * f, y0 - r + (y1 - y0) * f * f - Math.sin(Math.PI * f) * rowH * 0.35];
+  }
+
+  function draw(now) {
+    g.clearRect(0, 0, width, height);
+    g.fillStyle = cssVar('--muted');
+    for (let row = 0; row < ROWS; row++) {
+      for (let j = 0; j < row + 3; j++) {
+        g.beginPath();
+        g.arc(width / 2 + (j - (row + 2) / 2) * gap, top + row * rowH, 2.6, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    MULTS.forEach((m, k) => {
+      const x = xAt(ROWS, k), w = gap - 3, lit = glow[k] && now - glow[k] < 500;
+      g.fillStyle = slotColor(m);
+      g.globalAlpha = lit ? 1 : 0.78;
+      const lift = lit ? -4 * (1 - (now - glow[k]) / 500) : 0;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x - w / 2, slotY - 2 + lift, w, 26, 6);
+      else g.rect(x - w / 2, slotY - 2 + lift, w, 26);
+      g.fill();
+      g.globalAlpha = 1;
+      g.fillStyle = '#fff';
+      g.font = `800 ${gap < 30 ? 9 : 10.5}px Nunito, sans-serif`;
+      g.textAlign = 'center';
+      g.fillText(m + '×', x, slotY + 15 + lift);
+    });
+    balls.forEach(ball => {
+      const [x, y] = ballPos(ball, now);
+      g.fillStyle = cssVar('--accent-2');
+      g.beginPath();
+      g.arc(x, y, gap * 0.22, 0, Math.PI * 2);
+      g.fill();
+    });
+  }
+
+  function land(ball) {
+    glow[ball.slot] = performance.now();
+    if (newest.profile) setCoins(newest.profile);
+    picker.refresh();
+    const profit = ball.win - ball.bet;
+    const text = `${ball.mult}× → ` + (profit > 0 ? `+${profit} 🪙` : profit === 0 ? 'ставка вернулась' : `−${-profit} 🪙`);
+    showOutcome(status, text, profit > 0 ? 'wins' : profit < 0 ? 'losses' : 'draws');
+    if (ball.mult >= 5) haptic('win');
+    else sound(ball.mult > 1 ? 'coin' : 'stop');
+  }
+
+  function loop(now) {
+    for (let i = balls.length - 1; i >= 0; i--) {
+      const ball = balls[i];
+      const row = Math.floor((now - ball.start) / STEP) - 1;
+      if (row > ball.row && row < ROWS) { ball.row = row; sound('peg'); thud(); }
+      if (now - ball.start >= (ROWS + 1) * STEP) {
+        balls.splice(i, 1);
+        land(ball);
+      }
+    }
+    draw(now);
+    const glowing = Object.values(glow).some(t => now - t < 500);
+    raf = balls.length || glowing ? requestAnimationFrame(loop) : null;
+  }
+
+  async function drop() {
+    if (balls.length >= MAX_BALLS) return toast('Дождитесь, пока упадут шарики');
+    const seq = ++sent;
+    try {
+      const out = await action('luck', { game: 'plinko', bet: picker.get() });
+      if (seq > newest.seq) newest = { seq, profile: out.profile };
+      balls.push({ path: out.path, slot: out.slot, mult: out.multiplier, win: out.win, bet: out.bet,
+        start: performance.now(), row: -1 });
+      if (!raf) raf = requestAnimationFrame(loop);
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  root.insertBefore(button('🔵 Бросить шарик', 'btn wide', drop), picker.el);
+  bindKeys({ ' ': drop, Enter: drop });
+  draw(performance.now());
+  return () => { if (raf) cancelAnimationFrame(raf); };
+};
+
+/* Синтез — колесо с зелёным сектором, чем больше множитель, тем он уже */
+GAMES.synth = function (root) {
+  const MULTS = [1.5, 2, 3, 5, 10, 25, 50];
+  const RTP = 0.95;
+  let mult = 2, rotation = 0, busy = false, raf = null;
+
+  const stage = el('div', 'wheel-stage');
+  const wheel = el('div', 'wheel');
+  const hub = el('div', 'wheel-hub');
+  stage.appendChild(wheel);
+  stage.appendChild(el('div', 'wheel-pointer'));
+  stage.appendChild(hub);
+  root.appendChild(stage);
+  const status = statusLine(root, 'Выберите множитель и ставку');
+  const chance = el('div', 'hint');
+  root.appendChild(chance);
+  const chips = el('div', 'chips');
+  root.appendChild(chips);
+  const picker = betPicker(root);
+
+  function paint() {
+    wheel.style.setProperty('--win', (360 * RTP / mult) + 'deg');
+    hub.textContent = mult + '×';
+    chance.textContent = `Шанс ${(RTP / mult * 100).toFixed(1)}% · ставка × ${mult}`;
+    chips.innerHTML = '';
+    MULTS.forEach(m => {
+      const chip = button(m + '×', 'chip' + (m === mult ? ' on' : ''), () => {
+        if (busy) return;
+        mult = m;
+        paint();
+      });
+      chips.appendChild(chip);
+    });
+  }
+
+  /** Щелчки, пока колесо проходит деления: угол читаем из текущей матрицы поворота. */
+  function tickWhileSpinning() {
+    let last = null;
+    const step = () => {
+      const m = new DOMMatrixReadOnly(getComputedStyle(wheel).transform);
+      const angle = (Math.atan2(m.b, m.a) * 180 / Math.PI + 360) % 360;
+      const mark = Math.floor(angle / 15);
+      if (last !== null && mark !== last) sound('tick');
+      last = mark;
+      if (busy) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+  }
+
+  const spin = button('🌀 Запустить синтез', 'btn wide', async () => {
+    if (busy) return;
+    busy = true;
+    spin.disabled = true;
+    status.classList.remove('win', 'lose');
+    status.textContent = 'Синтез…';
+    try {
+      const out = await action('luck', { game: 'synth', bet: picker.get(), multiplier: mult });
+      // Точка out.angle колеса должна встать под стрелку сверху
+      rotation = Math.ceil(rotation / 360) * 360 + 360 * 5 + (360 - out.angle) % 360;
+      const duration = REDUCED_MOTION ? 10 : 4200;
+      wheel.style.transition = `transform ${duration}ms cubic-bezier(.12, .7, .14, 1)`;
+      wheel.style.transform = `rotate(${rotation}deg)`;
+      tickWhileSpinning();
+      await sleep(duration + 80);
+      const won = out.win > 0;
+      stage.classList.toggle('won', won);
+      showOutcome(status, won ? `🎉 Синтез удался! +${out.win - out.bet} 🪙` : `💨 Мимо сектора — −${out.bet} 🪙`,
+        won ? 'wins' : 'losses');
+      haptic(won ? 'win' : 'lose');
+      setCoins(out.profile);
+      picker.refresh();
+    } catch (e) {
+      status.textContent = 'Выберите множитель и ставку';
+      toast(e.message);
+    } finally {
+      busy = false;
+      spin.disabled = false;
+    }
+  });
+  root.insertBefore(spin, picker.el);
+  bindKeys({ ' ': () => spin.click(), Enter: () => spin.click() });
+  paint();
+  return () => { busy = false; if (raf) cancelAnimationFrame(raf); };
+};
+
+/* Ракетка — когда взорвётся, знает только сервер */
+GAMES.rocket = function (root) {
+  const width = Math.min(screenEl.clientWidth - 28, 380);
+  const height = 250;
+  const [canvas, g] = hiDpiCanvas(width, height);
+  canvas.className = 'rocket-sky';
+  const sky = el('div', 'rocket-wrap');
+  sky.appendChild(canvas);
+  const big = el('div', 'rocket-x', '1.00×');
+  sky.appendChild(big);
+  root.appendChild(sky);
+  const status = statusLine(root, 'Поставьте монеты и запускайте');
+  hintLine(root, 'Множитель растёт, пока ракета летит. Успейте забрать до взрыва');
+  const picker = betPicker(root);
+  const stars = Array.from({ length: 34 }, () => [Math.random() * width, Math.random() * height, Math.random() * 1.4 + 0.3]);
+  let round = null, t0 = 0, raf = null, poll = null, busy = false, finalX = null;
+
+  const multAt = t => Math.floor(100 * Math.exp(round.rate * Math.max(0, t))) / 100;
+  const elapsed = () => (performance.now() - t0) / 1000;
+
+  function draw(t, m, state) {
+    g.clearRect(0, 0, width, height);
+    stars.forEach(([x, y, r]) => {
+      g.fillStyle = 'rgba(255,255,255,.55)';
+      g.beginPath();
+      g.arc(((x - t * 12 * r) % width + width) % width, y, r, 0, Math.PI * 2);
+      g.fill();
+    });
+    const span = Math.max(8, t * 1.15), top = Math.max(2, m * 1.25);
+    const px = s => 18 + (s / span) * (width - 50);
+    const py = v => height - 20 - ((v - 1) / (top - 1)) * (height - 60);
+    g.lineWidth = 3;
+    g.strokeStyle = state === 'crashed' ? '#ef6a5c' : state === 'cashed' ? '#3fbf87' : cssVar('--accent-2');
+    g.beginPath();
+    for (let i = 0; i <= 40; i++) {
+      const s = t * i / 40;
+      const v = Math.exp(round.rate * s);
+      i ? g.lineTo(px(s), py(v)) : g.moveTo(px(s), py(v));
+    }
+    g.stroke();
+    const x = px(t), y = py(m);
+    g.font = '30px sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    if (state === 'crashed') {
+      g.fillText('💥', x, y);
+    } else {
+      g.save();
+      g.translate(x, y);
+      // 🚀 нарисована носом вправо-вверх (−45°): доворачиваем её по касательной к кривой
+      const back = Math.max(0, t - 0.3);
+      g.rotate(Math.atan2(y - py(Math.exp(round.rate * back)), x - px(back)) + Math.PI / 4);
+      g.fillText('🚀', 0, 0);
+      g.restore();
+    }
+  }
+
+  function frame() {
+    if (!round) return;
+    const t = finalX ? Math.log(finalX) / round.rate : elapsed();
+    const m = finalX || multAt(t);
+    big.textContent = m.toFixed(2) + '×';
+    draw(t, m, round.status);
+    if (round.status === 'flying') raf = requestAnimationFrame(frame);
+  }
+
+  function stopTimers() {
+    clearInterval(poll);
+    poll = null;
+    if (raf) cancelAnimationFrame(raf);
+    raf = null;
+  }
+
+  function show(view) {
+    round = view;
+    if (view.status === 'flying') {
+      finalX = null;
+      t0 = performance.now() - view.elapsed * 1000;
+      sky.className = 'rocket-wrap flying';
+      main.textContent = '💰 Забрать';
+      main.classList.add('cashout');
+      picker.el.hidden = true;
+      if (!poll) poll = setInterval(check, 700);
+      if (!raf) raf = requestAnimationFrame(frame);
+      return;
+    }
+    stopTimers();
+    finalX = view.status === 'cashed' ? view.cashed : view.crash;
+    sky.className = 'rocket-wrap ' + view.status;
+    frame();
+    if (view.status === 'cashed') {
+      showOutcome(status, `💰 Забрали на ${view.cashed.toFixed(2)}× · +${view.win - view.bet} 🪙\nРакета взорвалась бы на ${view.crash.toFixed(2)}×`,
+        view.win > view.bet ? 'wins' : 'draws');
+      sound('coin');
+    } else {
+      showOutcome(status, `💥 Взрыв на ${view.crash.toFixed(2)}× · −${view.bet} 🪙`, 'losses');
+      sound('bang');
+      haptic('lose');
+      replay(sky, 'shake');
+    }
+    status.style.whiteSpace = 'pre-line';
+    main.textContent = '🚀 Запустить снова';
+    main.classList.remove('cashout');
+    picker.el.hidden = false;
+    picker.refresh();
+  }
+
+  // Ответ на опрос может прийти позже ответа на «Забрать» — устаревший не показываем
+  let sentSeq = 0, shownSeq = 0;
+  async function send(op) {
+    const seq = ++sentSeq;
+    const out = await action('luck', { game: 'rocket', action: op, bet: picker.get() });
+    if (seq < shownSeq) return;
+    shownSeq = seq;
+    setCoins(out.profile);
+    if (out.round) show(out.round);
+  }
+
+  async function check() {
+    try { await send('status'); } catch (e) { /* связь мигнула — спросим ещё раз */ }
+  }
+
+  const main = button('🚀 Запустить', 'btn wide', async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      if (round && round.status === 'flying') {
+        await send('cashout');
+      } else {
+        status.classList.remove('win', 'lose');
+        status.textContent = 'Летим!';
+        sound('launch');
+        await send('start');
+      }
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      busy = false;
+    }
+  });
+  root.insertBefore(main, picker.el);
+  bindKeys({ ' ': () => main.click(), Enter: () => main.click() });
+  // Полёт, начатый до закрытия приложения, продолжается
+  action('luck', { game: 'rocket', action: 'status' }).then(out => {
+    if (out.round && out.round.status === 'flying') show(out.round);
+  }).catch(() => {});
+  return stopTimers;
+};
+
+/* Русская рулетка против бота — барабан заряжает сервер */
+GAMES.roulette = function (root) {
+  const CHAMBERS = 6;
+  const table = el('div', 'rr-table');
+  const you = el('div', 'rr-seat', '🙂 Вы');
+  const botSeat = el('div', 'rr-seat', '🤖 Бот');
+  const drum = el('div', 'rr-drum');
+  const chambers = Array.from({ length: CHAMBERS }, (_, i) => {
+    const c = el('i', 'rr-chamber');
+    c.style.setProperty('--i', i);
+    drum.appendChild(c);
+    return c;
+  });
+  table.appendChild(you);
+  table.appendChild(drum);
+  table.appendChild(botSeat);
+  root.appendChild(table);
+  const status = statusLine(root, 'Один патрон, шесть гнёзд. Стреляете первым');
+  hintLine(root, 'Патрон достался боту — забираете ×2. Шансы ровно 50 на 50');
+  const picker = betPicker(root);
+  let round = null, busy = false;
+
+  function seat(who) {
+    you.classList.toggle('turn', who === 'you');
+    botSeat.classList.toggle('turn', who === 'bot');
+  }
+
+  function reset() {
+    drum.style.setProperty('--turn', 0);
+    chambers.forEach(c => { c.className = 'rr-chamber'; });
+  }
+
+  async function animateShot(shot) {
+    seat(shot.who);
+    if (shot.who === 'bot') {
+      status.textContent = '🤖 Бот берёт револьвер…';
+      await sleep(900);
+    }
+    const index = round.shotsDone++;
+    drum.style.setProperty('--turn', index + 1);
+    sound('tick');
+    await sleep(550);
+    chambers[index].classList.add(shot.bang ? 'fired' : 'empty');
+    if (shot.bang) {
+      sound('bang');
+      replay(table, 'shake');
+      return;
+    }
+    sound('click');
+    thud();
+    status.textContent = shot.who === 'you' ? '*щёлк* — пусто. Ход бота' : '*щёлк* — бот выдыхает. Ваш ход';
+  }
+
+  async function render(view, shots) {
+    for (const shot of shots) await animateShot(shot);
+    round.view = view;
+    actions.innerHTML = '';
+    if (view.status === 'playing') {
+      seat('you');
+      if (!shots.length) status.textContent = 'Ваш ход — жмите на курок';
+      picker.el.hidden = true;
+      actions.appendChild(button('🔫 Нажать на курок', 'btn wide danger', () => send({ action: 'pull' })));
+      return;
+    }
+    seat(null);
+    const won = view.result === 'wins';
+    showOutcome(status, won ? `💥 Патрон достался боту! +${view.bet} 🪙` : `💥 Не повезло — −${view.bet} 🪙`, view.result);
+    haptic(won ? 'win' : 'lose');
+    picker.el.hidden = false;
+    picker.refresh();
+    actions.appendChild(button('🔄 Зарядить снова', 'btn wide', () => send({ action: 'start', bet: picker.get() })));
+  }
+
+  async function send(body) {
+    if (busy) return;
+    busy = true;
+    try {
+      const out = await action('luck', Object.assign({ game: 'roulette' }, body));
+      if (body.action === 'start') {
+        reset();
+        round = { shotsDone: out.round.shot };
+        for (let i = 0; i < out.round.shot; i++) chambers[i].classList.add('empty');
+        drum.style.setProperty('--turn', out.round.shot);
+        status.classList.remove('win', 'lose');
+      }
+      await render(out.round, out.round.shots);
+      setCoins(out.profile);
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  const actions = el('div');
+  root.insertBefore(actions, picker.el);
+  actions.appendChild(button('🔫 Зарядить револьвер', 'btn wide', () => send({ action: 'start', bet: picker.get() })));
+  root.appendChild(button('👥 Сыграть с другом в чате', 'btn wide secondary', () => openChatGame('Русская рулетка', 'рулетка')));
 };
 
 /* Wordle */
@@ -2514,10 +3227,12 @@ GAMES.pong = function (root, ctx) {
   const g = canvas.getContext('2d');
   const status = statusLine(root, 'До 5 очков');
 
-  const PADDLE = 62, THICK = 9;
+  // Мяч ускоряется после каждого отбития, а бот видит его с ошибкой и двигается
+  // не быстрее BOT_SPEED: на длинном розыгрыше он начинает промахиваться.
+  const PADDLE = 62, THICK = 9, START_SPEED = 4.1, MAX_SPEED = 9.5, BOT_SPEED = 3.3;
   let playerX = width / 2 - PADDLE / 2;
   let botX = playerX;
-  let ball = { x: width / 2, y: height / 2, dx: 2.6, dy: -3.2 };
+  let ball, botAim = width / 2;
   let score = [0, 0], raf = null, over = false;
 
   function move(clientX) {
@@ -2528,9 +3243,33 @@ GAMES.pong = function (root, ctx) {
   canvas.addEventListener('pointermove', e => { e.preventDefault(); move(e.clientX); });
   canvas.addEventListener('pointerdown', e => move(e.clientX));
 
-  function reset(direction) {
-    ball = { x: width / 2, y: height / 2, dx: (Math.random() < 0.5 ? -1 : 1) * 2.6, dy: direction * 3.2 };
+  function launch(angle, speed, direction) {
+    ball.dx = Math.sin(angle) * speed;
+    ball.dy = Math.cos(angle) * speed * direction;
   }
+
+  function reset(direction) {
+    ball = { x: width / 2, y: height / 2, speed: START_SPEED };
+    launch((Math.random() - 0.5) * 0.9, START_SPEED, direction);
+    aimBot();
+  }
+
+  /** Бот прикидывает, куда прилетит мяч; чем быстрее мяч, тем сильнее ошибается. */
+  function aimBot() {
+    const miss = (ball.speed - START_SPEED) * 9 + 6;
+    botAim = ball.x + ball.dx / Math.abs(ball.dy || 1) * (ball.y - 24) + (Math.random() - 0.5) * 2 * miss;
+    while (botAim < 0 || botAim > width) botAim = botAim < 0 ? -botAim : 2 * width - botAim;
+  }
+
+  /** Отбитие: угол зависит от того, какой частью ракетки попали, скорость растёт. */
+  function bounce(paddleX, direction) {
+    const offset = Math.max(-1, Math.min(1, (ball.x - paddleX - PADDLE / 2) / (PADDLE / 2)));
+    ball.speed = Math.min(MAX_SPEED, ball.speed * 1.07);
+    launch(offset * 1.05, ball.speed, direction);
+    sound('tick');
+    if (direction < 0) aimBot();          // мяч полетел к боту
+  }
+  reset(-1);
 
   function stop(playerWon) {
     over = true;
@@ -2541,18 +3280,23 @@ GAMES.pong = function (root, ctx) {
   }
 
   function loop() {
-    botX += Math.max(-3.1, Math.min(3.1, (ball.x - PADDLE / 2) - botX));
+    // Пока мяч летит к игроку, бот не гадает, а возвращается к центру
+    const target = ball.dy < 0 ? botAim : width / 2;
+    botX += Math.max(-BOT_SPEED, Math.min(BOT_SPEED, (target - PADDLE / 2) - botX));
     botX = Math.max(0, Math.min(width - PADDLE, botX));
 
     ball.x += ball.dx;
     ball.y += ball.dy;
-    if (ball.x < 6 || ball.x > width - 6) ball.dx *= -1;
+    if (ball.x < 6 || ball.x > width - 6) {
+      ball.dx *= -1;
+      ball.x = Math.max(6, Math.min(width - 6, ball.x));
+    }
 
-    if (ball.y > height - 24 && ball.x > playerX && ball.x < playerX + PADDLE && ball.dy > 0) ball.dy *= -1;
-    if (ball.y < 24 && ball.x > botX && ball.x < botX + PADDLE && ball.dy < 0) ball.dy *= -1;
+    if (ball.dy > 0 && ball.y > height - 24 && ball.y < height - 8 && ball.x > playerX - 4 && ball.x < playerX + PADDLE + 4) bounce(playerX, -1);
+    if (ball.dy < 0 && ball.y < 24 && ball.y > 8 && ball.x > botX - 4 && ball.x < botX + PADDLE + 4) bounce(botX, 1);
 
-    if (ball.y > height) { score[1] += 1; reset(-1); }
-    if (ball.y < 0) { score[0] += 1; reset(1); }
+    if (ball.y > height) { score[1] += 1; sound('lose'); reset(-1); }
+    if (ball.y < 0) { score[0] += 1; sound('coin'); reset(1); }
     status.textContent = 'Вы ' + score[0] + ' : ' + score[1] + ' Бот';
 
     g.fillStyle = '#0f1720';
@@ -2864,6 +3608,7 @@ function mix(hex, target, amount) {
 async function boot() {
   try {
     setLayout(storedLayout() || detectDevice(), false);
+    applyUiStyle();
     applyViewport();
     window.addEventListener('resize', applyViewport);
 
@@ -2894,8 +3639,13 @@ async function boot() {
     // Раз в минуту сверяем баланс и не начались ли тех. работы
     setInterval(() => { if (!document.hidden) refreshProfile(false); }, 60000);
 
-    if (new URLSearchParams(location.search).get('screen') === 'idea') openIdea();
-    const requested = new URLSearchParams(location.search).get('game');
+    // Ссылки t.me/<бот>?startapp=game_slot (или settings, idea) открывают нужный экран
+    const params = new URLSearchParams(location.search);
+    const start = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '';
+    const screen = params.get('screen') || (start.startsWith('game_') ? '' : start);
+    if (screen === 'idea') openIdea();
+    if (screen === 'settings') openSettings();
+    const requested = params.get('game') || (start.startsWith('game_') ? start.slice(5) : '');
     if (requested && GAMES[requested]) {
       const meta = CFG.games.find(g => g[0] === requested);
       openGame(requested, meta ? meta[1] : requested);

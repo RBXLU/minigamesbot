@@ -333,6 +333,7 @@ GAME_TITLES_LANG = {
         "room_quiz": "Вікторина (чат)",
         "room_combo": "Комбо-битва (чат)",
         "room_mafia": "Мафія (чат)",
+        "plinko": "Плінко", "synth": "Синтез", "rocket": "Ракетка", "roulette": "Російська рулетка",
     },
     "ru": {
         "rps": "Камень-ножницы-бумага", "ttt": "Крестики-нолики",
@@ -352,6 +353,7 @@ GAME_TITLES_LANG = {
         "room_quiz": "Викторина (чат)",
         "room_combo": "Комбо-битва (чат)",
         "room_mafia": "Мафия (чат)",
+        "plinko": "Плинко", "synth": "Синтез", "rocket": "Ракетка", "roulette": "Русская рулетка",
     },
     "en": {
         "rps": "Rock-Paper-Scissors", "ttt": "Tic-Tac-Toe",
@@ -371,6 +373,7 @@ GAME_TITLES_LANG = {
         "room_quiz": "Quiz (chat)",
         "room_combo": "Combo Battle (chat)",
         "room_mafia": "Mafia (chat)",
+        "plinko": "Plinko", "synth": "Synthesis", "rocket": "Rocket", "roulette": "Russian Roulette",
     }
 }
 
@@ -1150,7 +1153,7 @@ bot.edit_message_text = edit_message_text_with_victory
 _BUTTON_STYLE_RULES = (
     # красные: опасное, отказ, выход
     ("danger", ("admin_mnt_ask", "admin_mnt_on", "admin_ban_user", "admin_close_room", "idea_cancel",
-                "admin_idea_decline_", "room_leave_", "room_continue_no_", "find_cancel", "poker_fold_")),
+                "admin_idea_decline_", "room_leave_", "room_continue_no_", "find_cancel", "poker_fold_", "rrl_pull_")),
     # зелёные: подтвердить, забрать, присоединиться, начать
     ("success", ("admin_mnt_off", "admin_unban_user", "idea_send", "admin_idea_accept_", "hub_gift",
                  "hub_pass_claim", "hw_claim", "claim_", "check_subscription",
@@ -1254,7 +1257,11 @@ WEBAPP_GAMES = [
     ("minesweeper", "Сапёр", "💣", "solo"),
     ("guess", "Угадай число", "🎯", "solo"),
     ("reaction", "Блиц-реакция", "⚡", "solo"),
-    ("slot", "Казино", "🎰", "luck"),
+    ("slot", "Слоты", "🎰", "luck"),
+    ("plinko", "Плинко", "🔵", "luck"),
+    ("synth", "Синтез", "🌀", "luck"),
+    ("rocket", "Ракетка", "🚀", "luck"),
+    ("roulette", "Русская рулетка", "🔫", "luck"),
     ("coin", "Орёл и решка", "🪙", "luck"),
     ("blackjack", "Блэкджек", "🃏", "cards"),
     ("poker", "Покер", "♠️", "cards"),
@@ -1267,7 +1274,7 @@ WEBAPP_GAMES = [
 ]
 WEBAPP_GAME_KEYS = {key for key, _, _, _ in WEBAPP_GAMES}
 # Эти игры разыгрывает сервер (/api/action/luck): отчёт клиента о них не принимается.
-WEBAPP_SERVER_GAMES = {"coin", "slot", "blackjack", "poker"}
+WEBAPP_SERVER_GAMES = {"coin", "slot", "plinko", "synth", "rocket", "roulette", "blackjack", "poker"}
 
 # Игры, которым нужен чат Telegram: из Mini App ведём обратно в бота
 WEBAPP_CHAT_ONLY_GAMES = [
@@ -1276,6 +1283,7 @@ WEBAPP_CHAT_ONLY_GAMES = [
     ("mafia", "Мафия", "🎭", "мафия"),
     ("wordgame", "Словесная дуэль", "📝", "слова"),
     ("iduel", "Дуэль КНБ", "🤜", ""),
+    ("roulette", "Русская рулетка на двоих", "🔫", "рулетка"),
 ]
 SUPPORT_ADMIN_IDS_RAW = os.getenv("SUPPORT_ADMIN_IDS", "5782683757")
 SUPPORT_ADMIN_IDS = _parse_int_id_set(SUPPORT_ADMIN_IDS_RAW)
@@ -3370,6 +3378,10 @@ def _games_watchdog(interval=60):
             _maintenance_watch()
         except Exception as e:
             log_exception("maintenance_watch", e)
+        try:
+            _pay_weekly_prizes()
+        except Exception as e:
+            log_exception("weekly_prizes", e)
         ticks += 1
         if ticks % 10 == 0:
             _release_memory()
@@ -5152,6 +5164,127 @@ def iduel_move(call):
         _edit(f"⚔️ Дуэль завершена\n{round_line}\n{_iduel_score_line(st)}\n{outcome}")
     else:
         _edit(f"{round_line}\n\n⚔️ Раунд {st['round']}/3\n{_iduel_score_line(st)}", _iduel_kb(gid, st))
+
+
+# ---------------------------------------------------------------------------
+# Русская рулетка на двоих: инлайн «@бот рулетка» в любом чате. Ставку вносят
+# оба, когда второй принимает вызов; кому достался патрон — проиграл, банк
+# забирает другой. Кто молчит дольше ROULETTE_IDLE, проигрывает по таймауту.
+# ---------------------------------------------------------------------------
+ROULETTE_BETS = (10, 50, 100, 250, 500)
+ROULETTE_IDLE = 60
+roulette_duels = BoundedGames()
+
+
+def _roulette_new_duel(uid, name, bet):
+    return {"players": [uid], "names": {uid: name[:32]}, "bet": bet, "status": "waiting"}
+
+
+def _roulette_text(st):
+    p = st["players"]
+    head = f"🔫 Русская рулетка · ставка {st['bet']} 🪙"
+    if st["status"] == "waiting":
+        return (f"{head}\n\n{st['names'][p[0]]} крутит барабан и ждёт соперника.\n"
+                f"Один патрон, шесть гнёзд. Победитель забирает {2 * st['bet']} 🪙")
+    fired = st["shot"] - (st["status"] == "ended")
+    drum = "⚪" * fired + ("💥" if st["status"] == "ended" else "") + "⚫" * (casino.ROULETTE_CHAMBERS - st["shot"])
+    lines = [head, f"{st['names'][p[0]]} против {st['names'][p[1]]}", "", f"Барабан: {drum}"]
+    if st.get("last"):
+        lines.append(st["last"])
+    if st["status"] == "playing":
+        lines += ["", f"Ходит {st['names'][p[st['turn']]]}. Если ход затянется на минуту, соперник может нажать на курок и забрать банк"]
+    return "\n".join(lines)
+
+
+def _roulette_kb(gid, st):
+    kb = types.InlineKeyboardMarkup()
+    if st["status"] == "waiting":
+        kb.add(types.InlineKeyboardButton(f"🤝 Принять вызов · {st['bet']} 🪙", callback_data=f"rrl_join_{gid}"))
+    elif st["status"] == "playing":
+        kb.add(types.InlineKeyboardButton("🔫 Нажать на курок", callback_data=f"rrl_pull_{gid}"))
+    return kb
+
+
+def _roulette_edit(call, gid, st):
+    try:
+        if call.inline_message_id:
+            bot.edit_message_text(_roulette_text(st), inline_message_id=call.inline_message_id,
+                                  reply_markup=_roulette_kb(gid, st))
+        elif call.message:
+            safe_edit_message(call, _roulette_text(st), reply_markup=_roulette_kb(gid, st))
+    except Exception as e:
+        log_exception("roulette_edit", e)
+
+
+def _roulette_finish(gid, st, loser, note):
+    st["status"] = "ended"
+    winner = next(u for u in st["players"] if u != loser)
+    _chat_pay(winner, 2 * st["bet"])
+    for uid, result in ((winner, "wins"), (loser, "losses")):
+        _record_game_play_once(uid, "roulette", f"rrl_{gid}", display_name=st["names"][uid])
+        _record_game_result_once(uid, "roulette", result, f"rrl_{gid}", extra={"bet": st["bet"]}, reward=False)
+    st["last"] = f"{note}\n🏆 {st['names'][winner]} забирает {2 * st['bet']} 🪙"
+    roulette_duels.pop(gid, None)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith(("rrl_join_", "rrl_pull_")))
+def roulette_duel_callback(call):
+    user = call.from_user
+    if _deny_if_spam(user.id, call_id=call.id, action="luck"):
+        return
+    try:
+        _, op, gid = call.data.split("_", 2)
+        st = roulette_duels.get(gid)
+        if not st or st["status"] == "ended":
+            bot.answer_callback_query(call.id, "Эта дуэль уже закончилась")
+            return
+        if op == "join":
+            if user.id in st["players"]:
+                bot.answer_callback_query(call.id, "Ждём второго игрока — позовите друга")
+                return
+            if _deny_new_round(call):
+                return
+            with _chat_casino_lock:
+                if st["status"] != "waiting":
+                    bot.answer_callback_query(call.id, "Соперник уже нашёлся")
+                    return
+                ok, balance = _chat_take_bet(user.id, st["bet"])
+                if not ok:
+                    _no_coins_alert(call, balance, st["bet"])
+                    return
+                if not _chat_take_bet(st["players"][0], st["bet"])[0]:
+                    _chat_pay(user.id, st["bet"])
+                    bot.answer_callback_query(call.id, "У создателя дуэли не хватает монет на ставку", show_alert=True)
+                    return
+                st["players"].append(user.id)
+                st["names"][user.id] = _player_name(user)
+                st.update(casino.roulette_new(), status="playing", turn=random.randrange(2), moved=time.time())
+            bot.answer_callback_query(call.id, f"Ставка {st['bet']} 🪙 принята. Удачи!")
+        else:
+            with _chat_casino_lock:
+                if st["status"] != "playing" or user.id not in st["players"]:
+                    bot.answer_callback_query(call.id, "Вы не участник этой дуэли")
+                    return
+                shooter = st["players"][st["turn"]]
+                if user.id != shooter:
+                    if time.time() - st["moved"] < ROULETTE_IDLE:
+                        bot.answer_callback_query(call.id, f"Сейчас ходит {st['names'][shooter]}")
+                        return
+                    _roulette_finish(gid, st, shooter, f"⏱ Время вышло: {st['names'][shooter]} не успевает нажать на курок")
+                elif casino.roulette_pull(st):
+                    _roulette_finish(gid, st, shooter, f"💥 БАХ! Выбывает {st['names'][shooter]}")
+                else:
+                    st["last"] = f"*щёлк* — {st['names'][shooter]} выдыхает"
+                    st["turn"] = 1 - st["turn"]
+                    st["moved"] = time.time()
+            bot.answer_callback_query(call.id)
+        _roulette_edit(call, gid, st)
+    except Exception as e:
+        log_exception("roulette_duel", e, user_id=user.id)
+        try:
+            bot.answer_callback_query(call.id, "Барабан заклинило — попробуйте ещё раз")
+        except Exception:
+            pass
 
 
 def _wordle_new_game(owner_id):
@@ -7342,7 +7475,7 @@ _MAINTENANCE_CALLBACK_PREFIXES = (
     "quizgame_start_", "quizgame_new", "combogame_join_", "bship_join_", "bship_new_",
     "chess_join_", "chess_new_", "mafia_join_", "mafia_start_", "poker_new_", "pmttt_new_",
     "bj_new_", "wrdl_new_", "g2048_new_", "tetris_new", "hangman_new", "minesweeper_new",
-    "reaction_begin_", "cbet_", "sbet_", "grp_play_", "room_continue_yes_",
+    "reaction_begin_", "cbet_", "sbet_", "rrl_join_", "grp_play_", "room_continue_yes_",
     "roomrps_join_", "roomduel_join_", "roombship_join_", "roomquiz_join_", "roomquiz_start_",
     "roomcombo_join_", "roommafia_start_", "os_game_", "biz_coin_flip", "biz_slot_spin",
 )
@@ -9486,6 +9619,23 @@ def ai_inline(query):
             reply_markup=_bship_public_keyboard(bgid, game),
         )
         bot.answer_inline_query(query.id, [result], cache_time=1, is_personal=True)
+        return
+
+    if normalized in ("рулетка", "русская рулетка", "roulette", "рулетка вдвоём"):
+        results = []
+        for bet in ROULETTE_BETS:
+            rgid = short_id()
+            duel = roulette_duels[rgid] = _roulette_new_duel(uid, display_name, bet)
+            results.append(types.InlineQueryResultArticle(
+                id=f"rrl_{rgid}",
+                title=f"🔫 {get_game_title(uid, 'roulette')} · {bet} 🪙",
+                description=localized_text(uid, "Дуэль на двоих: победитель забирает обе ставки",
+                                           "Duel for two: the winner takes both bets",
+                                           "Дуель на двох: переможець забирає обидві ставки"),
+                input_message_content=types.InputTextMessageContent(_roulette_text(duel)),
+                reply_markup=_roulette_kb(rgid, duel),
+            ))
+        bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
         return
 
     if normalized in ("шахматы", "шах", "chess"):
@@ -14634,8 +14784,8 @@ WEBAPP_RECORD_GAMES = {
 }
 
 
-def _week_id():
-    year, week, _ = date.today().isocalendar()
+def _week_id(day=None):
+    year, week, _ = (day or date.today()).isocalendar()
     return f"{year}-W{week:02d}"
 
 
@@ -14674,6 +14824,8 @@ def _save_record(uid, game_key, raw_score):
             records = rec["records"] = {}
         week = rec.get("records_week")
         if not isinstance(week, dict) or week.get("week") != _week_id():
+            if isinstance(week, dict):
+                rec["records_prev_week"] = week        # до выплаты наград за неделю
             week = rec["records_week"] = {"week": _week_id()}
         if _better(game_key, value, week.get(game_key)):
             week[game_key] = value
@@ -14718,9 +14870,78 @@ def _webapp_records(uid, tg_user, payload):
         "unit": WEBAPP_RECORD_GAMES[game_key][2],
         "higher_better": WEBAPP_RECORD_GAMES[game_key][0],
         "best": _records_of(rec).get(game_key),
+        "prizes": WEEKLY_PRIZES,
+        "last_winners": (read_state_key("weekly_prizes", {}, db_path=DB_FILE) or {}).get("winners", {}).get(game_key, []),
         "week_best": week.get(game_key) if week.get("week") == _week_id() else None,
         "top": top,
     }
+
+
+# Награды за топ недели: в понедельник первые трое по каждой игре с рекордами
+# получают монеты. Счёт присылает клиент, поэтому призы скромные, а сам счёт
+# по-прежнему проходит проверку на правдоподобие (_parse_score).
+WEEKLY_PRIZES = (300, 200, 100)
+
+
+def _week_scores(rec, week_id):
+    for key in ("records_week", "records_prev_week"):
+        week = rec.get(key)
+        if isinstance(week, dict) and week.get("week") == week_id:
+            return week
+    return {}
+
+
+def _pay_weekly_prizes():
+    week_id = _week_id(date.today() - timedelta(days=7))
+    if _pay_weekly_prizes.done == week_id:
+        return
+    if (read_state_key("weekly_prizes", {}, db_path=DB_FILE) or {}).get("paid") == week_id:
+        _pay_weekly_prizes.done = week_id
+        return
+    before = {}
+
+    def claim(value):
+        before.update(value or {})
+        return {**(value or {}), "paid": week_id}
+    # Отметку ставим до выплаты: перезапуск посреди раздачи не заплатит дважды
+    update_state_key("weekly_prizes", claim, default={}, db_path=DB_FILE)
+    if before.get("paid") == week_id:
+        return
+    rows = {game: [] for game in WEBAPP_RECORD_GAMES}
+    for uid_str, rec in _iter_users():
+        scores = _week_scores(rec, week_id)
+        for game in rows:
+            if scores.get(game):
+                rows[game].append((scores[game], uid_str, str(rec.get("display_name") or f"user_{uid_str}")))
+    winners = {}
+    for game, found in rows.items():
+        higher = WEBAPP_RECORD_GAMES[game][0]
+        found.sort(key=lambda row: (-row[0] if higher else row[0], row[1]))
+        winners[game] = []
+        for place, ((score, uid_str, name), prize) in enumerate(zip(found, WEEKLY_PRIZES), 1):
+            with user_record(uid_str) as rec:
+                rec["coins"] = int(rec.get("coins", 0) or 0) + prize
+            winners[game].append({"place": place, "name": name, "score": score, "prize": prize})
+            _notify_weekly_prize(uid_str, game, place, score, prize)
+    update_state_key("weekly_prizes", lambda value: {**(value or {}), "week": week_id, "winners": winners},
+                     default={}, db_path=DB_FILE)
+    _pay_weekly_prizes.done = week_id
+    LOGGER.info("Награды за неделю %s выданы: %s", week_id,
+                {game: len(found) for game, found in winners.items()})
+
+
+_pay_weekly_prizes.done = None
+
+
+def _notify_weekly_prize(uid_str, game, place, score, prize):
+    if not load_user_record(uid_str).get("notifications_enabled", True):
+        return
+    medal = {1: "🥇", 2: "🥈", 3: "🥉"}[place]
+    try:
+        bot.send_message(int(uid_str), f"{medal} {place} место за неделю в игре «{GAME_TITLES.get(game, game)}»: "
+                                       f"{score} {WEBAPP_RECORD_GAMES[game][2]}\nНаграда: +{prize} 🪙 — уже на балансе")
+    except Exception as e:
+        log_exception("weekly_prize_notify", e, user_id=uid_str)
 
 
 # ------------------------------- магазин -------------------------------
@@ -14868,6 +15089,7 @@ def _webapp_apply_result(user_id, tg_user, payload):
 # Ставка списывается при начале раздачи и выплачивается сервером: закрыть
 # приложение, увидев плохие карты, бесполезно — ставка уже в банке.
 webapp_tables = BoundedGames(previews=False)     # uid -> {"game", "bet", "state", "session"}
+webapp_rounds = BoundedGames(previews=False)     # "uid:игра" -> раунд ракетки или рулетки
 
 
 def _luck_take_bet(uid, raw_bet):
@@ -14881,9 +15103,9 @@ def _luck_take_bet(uid, raw_bet):
     return bet
 
 
-def _luck_settle(uid, game_key, bet, result, session, extra=None, multiplier=None):
+def _luck_settle(uid, game_key, bet, result, session, extra=None, win=None):
     """Выплата и запись партии в статистику, квесты, тыквы и XP."""
-    win = bet * multiplier if multiplier is not None else casino.payout(bet, result)
+    win = casino.payout(bet, result) if win is None else win
     if win:
         with user_record(uid) as rec:
             rec["coins"] = int(rec.get("coins", 0) or 0) + win
@@ -14905,7 +15127,7 @@ def _webapp_luck_locked(uid, tg_user, payload):
     game = str(payload.get("game") or "")
     action = str(payload.get("action") or "")
     out = {}
-    if game in ("coin", "slot") and _maintenance_applies(uid):
+    if game in ("coin", "slot", "plinko", "synth") and _maintenance_applies(uid):
         raise ValueError("maintenance")
     if game == "coin":
         side = "heads" if payload.get("side") == "heads" else "tails"
@@ -14921,14 +15143,121 @@ def _webapp_luck_locked(uid, tg_user, payload):
             raise ValueError("not enough coins")
         reels, multiplier = casino.slot_spin()
         result = "wins" if multiplier > 1 else "draws" if multiplier == 1 else "losses"
-        win = _luck_settle(uid, "slot", bet, result, short_id(), {"reels": "".join(reels)}, multiplier)
+        win = _luck_settle(uid, "slot", bet, result, short_id(), {"reels": "".join(reels)}, bet * multiplier)
         out = {"reels": reels, "multiplier": multiplier, "result": result, "bet": bet, "win": win}
+    elif game == "plinko":
+        bet = _luck_take_bet(uid, payload.get("bet"))
+        if bet is None:
+            raise ValueError("not enough coins")
+        path, slot, multiplier, win = casino.plinko_drop(bet)
+        _luck_settle(uid, "plinko", bet, _luck_result(bet, win), short_id(), {"x": multiplier}, win)
+        out = {"path": path, "slot": slot, "multiplier": multiplier, "bet": bet, "win": win}
+    elif game == "synth":
+        try:
+            multiplier = float(payload.get("multiplier"))
+        except (TypeError, ValueError):
+            raise ValueError("bad multiplier")
+        multiplier = int(multiplier) if multiplier.is_integer() else multiplier
+        if multiplier not in casino.SYNTH_MULTIPLIERS:
+            raise ValueError("bad multiplier")
+        bet = _luck_take_bet(uid, payload.get("bet"))
+        if bet is None:
+            raise ValueError("not enough coins")
+        angle, chance, win = casino.synth_spin(bet, multiplier)
+        _luck_settle(uid, "synth", bet, _luck_result(bet, win), short_id(), {"x": multiplier}, win)
+        out = {"angle": angle, "chance": chance, "multiplier": multiplier, "bet": bet, "win": win}
+    elif game == "rocket":
+        out = _webapp_rocket(uid, action, payload)
+    elif game == "roulette":
+        out = _webapp_roulette(uid, action, payload)
     elif game in ("blackjack", "poker"):
         out = _webapp_card_table(uid, game, action, payload)
     else:
         raise ValueError("unknown game")
-    out["profile"] = _webapp_profile(uid, tg_user)
+    # Опрос летящей ракетки баланс не меняет — профиль на каждый опрос не собираем
+    if not (game == "rocket" and action == "status"):
+        out["profile"] = _webapp_profile(uid, tg_user)
     return out
+
+
+def _luck_result(bet, win):
+    return "wins" if win > bet else "draws" if win == bet else "losses"
+
+
+def _new_round(uid, game, payload, make_state):
+    """Новый раунд игры с состоянием: ставка списана, раунд лежит в webapp_rounds."""
+    if _maintenance_applies(uid):
+        raise ValueError("maintenance")
+    bet = _luck_take_bet(uid, payload.get("bet"))
+    if bet is None:
+        raise ValueError("not enough coins")
+    rnd = webapp_rounds[f"{uid}:{game}"] = {"bet": bet, "session": short_id(), "win": 0, **make_state()}
+    return rnd
+
+
+def _settle_round(uid, game, rnd, result, win, extra=None):
+    if not rnd.get("settled"):
+        rnd["settled"] = True
+        rnd["win"] = _luck_settle(uid, game, rnd["bet"], result, rnd["session"], extra, win)
+
+
+# Ракетка: клиент только рисует полёт. Когда она взорвётся, знает сервер, а
+# «Забрать» он считает по своим часам — подсмотреть или подвинуть взрыв нельзя.
+def _webapp_rocket(uid, action, payload):
+    key = f"{uid}:rocket"
+    rnd = webapp_rounds.get(key)
+    if rnd and not rnd.get("settled"):
+        now = casino.rocket_multiplier(time.monotonic() - rnd["started"])
+        if now >= rnd["crash"]:
+            _settle_round(uid, "rocket", rnd, "losses", 0, {"x": rnd["crash"]})
+        elif action == "cashout":
+            win = int(rnd["bet"] * now)
+            rnd["cashed"] = now
+            _settle_round(uid, "rocket", rnd, _luck_result(rnd["bet"], win), win, {"x": now})
+    if action == "start" and (not rnd or rnd.get("settled")):
+        # Незаконченный полёт не сбрасываем: клиент просто продолжит его показывать
+        rnd = _new_round(uid, "rocket", payload, lambda: {
+            "crash": casino.rocket_crash_point(), "started": time.monotonic()})
+    if not rnd:
+        if action == "status":
+            return {"round": None}                 # приложение открыли без полёта — это не ошибка
+        raise ValueError("no active round")
+    view = {"bet": rnd["bet"], "elapsed": time.monotonic() - rnd["started"], "rate": casino.ROCKET_RATE,
+            "status": "flying" if not rnd.get("settled") else "cashed" if rnd.get("cashed") else "crashed"}
+    if rnd.get("settled"):
+        view.update(win=rnd["win"], crash=rnd["crash"], cashed=rnd.get("cashed"))
+    return {"round": view}
+
+
+# Русская рулетка против бота: игрок стреляет первым, бот — следом.
+def _webapp_roulette(uid, action, payload):
+    key = f"{uid}:roulette"
+    rnd = webapp_rounds.get(key)
+    shots = []
+    if action == "start":
+        if rnd and not rnd.get("settled"):
+            return {"round": _roulette_view(rnd, shots)}
+        rnd = _new_round(uid, "roulette", payload, casino.roulette_new)
+    elif action == "pull":
+        if not rnd or rnd.get("settled"):
+            raise ValueError("no active round")
+        for shooter, result in (("you", "losses"), ("bot", "wins")):
+            bang = casino.roulette_pull(rnd)
+            shots.append({"who": shooter, "bang": bang})
+            if bang:
+                _settle_round(uid, "roulette", rnd, result, 2 * rnd["bet"] if result == "wins" else 0)
+                break
+    else:
+        raise ValueError("unknown action")
+    return {"round": _roulette_view(rnd, shots)}
+
+
+def _roulette_view(rnd, shots):
+    view = {"bet": rnd["bet"], "shot": rnd["shot"], "chambers": casino.ROULETTE_CHAMBERS,
+            "shots": shots, "status": "ended" if rnd.get("settled") else "playing", "win": rnd["win"]}
+    if rnd.get("settled"):
+        view["result"] = "wins" if rnd["win"] else "losses"
+    return view
 
 
 def _webapp_card_table(uid, game, action, payload):
@@ -15110,6 +15439,16 @@ def _webapp_admin(uid, tg_user, payload):
     raise ValueError("unknown action")
 
 
+def _webapp_settings(uid, tg_user, payload):
+    """Язык из настроек Mini App — общий с ботом."""
+    if payload.get("op") == "lang":
+        lang = str(payload.get("lang") or "")
+        if lang not in LANGUAGES:
+            raise ValueError("bad language")
+        set_user_language(uid, lang)
+    return {"profile": _webapp_profile(uid, tg_user)}
+
+
 def _webapp_subscription(user_id):
     """Mini App открывается кнопкой «Играть» у любого, кто написал боту, — подписку
     проверяем здесь, как в /start. None — подписка не нужна или уже есть."""
@@ -15141,7 +15480,7 @@ webapp_server = create_webapp(
         "season": _webapp_season,
         "gift": _webapp_gift,
         "idea": _webapp_idea,
-    }.items()} | {"admin": _webapp_admin},
+    }.items()} | {"admin": _webapp_admin, "settings": _webapp_settings},
 )
 
 

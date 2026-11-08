@@ -4,6 +4,7 @@
 списывается при начале раздачи, выигрыш выплачивает сервер. Модуль ничего не
 знает про Telegram и базу — только правила, поэтому проверяется без бота.
 """
+import math
 import random
 
 BET_MIN = 10
@@ -220,3 +221,71 @@ def poker_public(state):
         data["player_hand"] = HAND_NAMES[best_hand(state["player"] + state["community"])[0]]
         data["bot_hand"] = HAND_NAMES[best_hand(state["bot"] + state["community"])[0]]
     return data
+
+
+# ------------------------------------ плинко ------------------------------------
+# Шарик проходит PLINKO_ROWS рядов штырьков и на каждом отскакивает влево или
+# вправо. Края выпадают редко (1 из 1024), середина — часто; отдача ≈ 95 %.
+PLINKO_ROWS = 10
+PLINKO_MULTIPLIERS = [25, 5, 2, 1.2, 0.6, 0.4, 0.6, 1.2, 2, 5, 25]
+
+
+def plinko_drop(bet, rng=random):
+    """(путь из 0/1 по рядам, номер лунки, множитель, выплата)."""
+    path = [rng.randint(0, 1) for _ in range(PLINKO_ROWS)]
+    slot = sum(path)
+    multiplier = PLINKO_MULTIPLIERS[slot]
+    return path, slot, multiplier, int(bet * multiplier)
+
+
+# ------------------------------------ синтез ------------------------------------
+# Колесо с зелёным сектором: чем больше множитель, тем сектор уже.
+# Шанс = SYNTH_RTP / множитель, так что отдача одинаковая при любом выборе.
+SYNTH_MULTIPLIERS = (1.5, 2, 3, 5, 10, 25, 50)
+SYNTH_RTP = 0.95
+
+
+def synth_spin(bet, multiplier, rng=random):
+    """(угол остановки 0–360 от верха по часовой, доля сектора, выплата).
+    Сектор выигрыша — от 0° до 360°·доля."""
+    if multiplier not in SYNTH_MULTIPLIERS:
+        raise ValueError("bad multiplier")
+    chance = SYNTH_RTP / multiplier
+    angle = rng.random() * 360
+    return angle, chance, int(bet * multiplier) if angle < 360 * chance else 0
+
+
+# ------------------------------------ ракетка ------------------------------------
+# Множитель растёт как e^(rate·t). Точку взрыва сервер выбирает при старте и
+# клиенту не отдаёт: P(взрыв позже x) = 0.96 / x, то есть отдача 96 %.
+ROCKET_RATE = 0.12          # ×2 примерно за 5,8 с
+ROCKET_MAX = 100.0
+
+
+def rocket_crash_point(rng=random):
+    return max(1.0, min(ROCKET_MAX, int(96 / (1 - rng.random())) / 100))
+
+
+def rocket_multiplier(elapsed):
+    return int(100 * math.exp(ROCKET_RATE * max(0.0, elapsed))) / 100
+
+
+def rocket_crash_time(crash):
+    return math.log(crash) / ROCKET_RATE
+
+
+# --------------------------------- русская рулетка ---------------------------------
+# Барабан на 6 гнёзд, один патрон. Стреляют по очереди: у того, кто начинает,
+# патрон в гнёздах 1, 3, 5 — ровно половина, поэтому выигрыш — ×2.
+ROULETTE_CHAMBERS = 6
+
+
+def roulette_new(rng=random):
+    return {"bullet": rng.randrange(ROULETTE_CHAMBERS), "shot": 0}
+
+
+def roulette_pull(state):
+    """Следующий выстрел; True — выстрелил патрон."""
+    bang = state["shot"] == state["bullet"]
+    state["shot"] += 1
+    return bang
