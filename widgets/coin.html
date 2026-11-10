@@ -1,0 +1,36 @@
+<style>
+body{margin:0;padding:12px 12px max(10px,env(safe-area-inset-bottom));text-align:center}
+#f{width:96px;height:96px;margin:4px auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:44px;background:var(--tg-theme-secondary-bg-color);border:3px solid var(--tg-theme-button-color)}
+#f.s{animation:f .25s linear infinite}
+@keyframes f{50%{transform:scaleX(.05)}}
+#t{min-height:22px;font-weight:600;margin-bottom:4px}#t.w{color:var(--tg-theme-accent-text-color)}#t.l{color:var(--tg-theme-destructive-text-color)}
+#c{color:var(--tg-theme-hint-color);font-size:.9em;margin-bottom:8px;font-variant-numeric:tabular-nums}
+.k{display:flex;gap:6px;margin-bottom:6px}.k button{flex:1}
+#b button{background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color)}
+#b button.on{background:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color)}
+</style>
+<div id="f">🪙</div><div id="t"></div><div id="c"></div>
+<div class="k" id="b"></div><div class="k" id="s"></div>
+<script>
+const W=TelegramWidget,T=__T__,B=[10,50,100],F={h:'🦅',t:'🌙'},$=i=>document.getElementById(i);
+let bet=10,busy=0;
+const say=(x,k)=>{$('t').textContent=x;$('t').className=k||''};
+const bal=c=>{if(c!=null)$('c').textContent=T.bal+' '+c+' 🪙'};
+const btn=(p,x,f)=>{const b=document.createElement('button');b.textContent=x;b.addEventListener('click',f);$(p).appendChild(b);return b};
+B.forEach(v=>btn('b',v,()=>{bet=v;draw()}));
+function draw(){[...$('b').children].forEach((b,i)=>b.className=B[i]==bet?'on':'')}
+['h','t'].forEach(side=>btn('s',F[side]+' '+T[side],()=>{
+  if(busy)return;busy=1;say('');$('f').className='s';
+  W.request('coin:'+side+':'+bet).then(a=>{
+    const o=JSON.parse(a.result||'{}');
+    setTimeout(()=>{
+      busy=0;$('f').className='';if(o.e)return say(T[o.e]||T.err,'l');
+      $('f').textContent=F[o.g];bal(o.c);const w=o.g==side;
+      say(T['got_'+o.g]+(w?' +'+bet:' −'+bet)+' 🪙',w?'w':'l');
+      W.HapticFeedback.notificationOccurred(w?'success':'error');
+    },700);
+  },e=>{busy=0;$('f').className='';say(T[e.code]||T.err,'l')});
+}));
+draw();say(T.pick);
+W.request('bal').then(a=>bal(JSON.parse(a.result||'{}').c),()=>{});
+</script>

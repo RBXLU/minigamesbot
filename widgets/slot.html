@@ -1,0 +1,52 @@
+<style>
+body{margin:0;padding:10px 12px max(10px,env(safe-area-inset-bottom))}
+#m{display:flex;gap:6px;position:relative}
+.r{flex:1;height:174px;overflow:hidden;border-radius:12px;background:var(--tg-theme-secondary-bg-color)}
+.r p{margin:0;height:58px;display:flex;align-items:center;justify-content:center;font-size:32px}
+#l{position:absolute;left:0;right:0;top:58px;height:56px;border:1px solid var(--tg-theme-section-separator-color);border-width:1px 0;pointer-events:none}
+#m.w #l{border-color:var(--tg-theme-button-color)}
+#h{display:flex;justify-content:space-between;margin:9px 2px 7px;font-weight:600}
+#c{color:var(--tg-theme-hint-color);font-variant-numeric:tabular-nums}
+#t.w{color:var(--tg-theme-accent-text-color)}#t.l{color:var(--tg-theme-destructive-text-color)}
+#b{display:flex;gap:6px;margin-bottom:6px}#b button{flex:1;background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color)}
+#b button.on{background:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color)}
+#g{width:100%}
+</style>
+<div id="m"><div class="r"></div><div class="r"></div><div class="r"></div><div id="l"></div></div>
+<div id="h"><span id="t"></span><span id="c"></span></div>
+<div id="b"></div><button id="g"></button>
+<script>
+const W=TelegramWidget,T=__T__,S=['🍒','🍋','🍉','⭐','💎','7️⃣'],B=[10,50,100],$=i=>document.getElementById(i);
+const R=[...document.querySelectorAll('.r')],rnd=()=>S[Math.random()*6|0],H=58;
+let bet=10,busy=0;
+const fill=(r,a)=>{r.innerHTML='<div>'+a.map(x=>'<p>'+x+'</p>').join('')+'</div>'};
+const say=(x,k)=>{$('t').textContent=x;$('t').className=k||''};
+const bal=c=>{if(c!=null)$('c').textContent=c+' 🪙'};
+const fail=e=>{busy=0;$('g').disabled=false;say(T[e]||T.err,'l')};
+R.forEach(r=>fill(r,[rnd(),rnd(),rnd()]));
+B.forEach(v=>{const b=document.createElement('button');b.textContent=v;b.addEventListener('click',()=>{bet=v;draw()});$('b').appendChild(b)});
+function draw(){[...$('b').children].forEach((b,i)=>b.className=B[i]==bet?'on':'')}
+function roll(r,s,i){
+  const a=[rnd(),s,rnd()];for(let k=0;k<12+i*5;k++)a.push(rnd());
+  fill(r,a.concat([...r.querySelectorAll('p')].slice(0,3).map(n=>n.textContent)));
+  const st=r.firstChild.style;st.transform='translateY('+(-a.length*H)+'px)';r.offsetWidth;
+  st.transition='transform '+(900+i*350)+'ms cubic-bezier(.15,.7,.25,1.05)';st.transform='none';
+  setTimeout(()=>{fill(r,a.slice(0,3));W.HapticFeedback.impactOccurred('rigid')},950+i*350);
+}
+$('g').textContent=T.spin;
+$('g').addEventListener('click',()=>{
+  if(busy)return;busy=1;$('g').disabled=true;say('');$('m').className='';
+  W.request('spin:'+bet).then(a=>{
+    const o=JSON.parse(a.result||'{}');if(o.e)return fail(o.e);
+    R.forEach((r,i)=>roll(r,o.r[i],i));
+    setTimeout(()=>{
+      busy=0;$('g').disabled=false;bal(o.c);
+      const p=o.w-bet;if(o.m>1)$('m').className='w';
+      say(o.m>=20?T.jp+' +'+p+' 🪙':o.m>1?T.three+' +'+p+' 🪙':o.m==1?T.pair:T.miss+' −'+bet+' 🪙',o.m>1?'w':o.m<1?'l':'');
+      W.HapticFeedback.notificationOccurred(o.m>1?'success':o.m<1?'error':'warning');
+    },1700);
+  },e=>fail(e.code));
+});
+draw();say(T.pick);
+W.request('bal').then(a=>bal(JSON.parse(a.result||'{}').c),()=>{});
+</script>

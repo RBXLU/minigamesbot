@@ -51,6 +51,7 @@ from core import business as biz_core
 from core import i18n as i18n_core
 from core import admin_auth
 from core import casino
+from core import widgets as widgets_core
 from core import events as ev
 from room_games import (
     ROOM_VOTE_GAMES,
@@ -7700,6 +7701,8 @@ def _maintenance_intercept(update):
 # Участники групп и реакции боту не нужны — они только шумят.
 ALLOWED_UPDATES = [kind for kind in telebot.util.update_types
                    if kind not in ("chat_member", "message_reaction", "message_reaction_count")]
+# Нажатия в виджетах (Bot API 10.4): библиотека этих типов ещё не знает
+ALLOWED_UPDATES += ["widget_query", "shared_widget_query"]
 
 _original_process_new_updates = bot.process_new_updates
 
@@ -14087,6 +14090,157 @@ def slot_bet_callback(call):
             bot.answer_callback_query(call.id, "Барабаны заело — попробуйте ещё раз")
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Виджеты (Bot API 10.4): игра живёт прямо в пузыре сообщения, без Mini App.
+# Пока Telegram пускает виджеты только в личку с ботом. pyTelegramBotAPI 4.37
+# о них не знает: методы зовём напрямую, а widget_query берём из сырого апдейта.
+# Ставка, розыгрыш и выплата — на сервере, как у игр на удачу в чате.
+# ---------------------------------------------------------------------------
+WIDGET_COMMON = {
+    "pick": "Выберите ставку",
+    "err": "Не получилось, попробуйте ещё раз",
+    "coins": "Не хватает монет",
+    "subscribe": "Сначала подпишитесь на канал",
+    "maintenance": "Идут технические работы",
+    "banned": "Доступ к боту ограничен",
+    "BUSY": "Секунду…",
+    "RATE_LIMITED": "Слишком быстро, подождите пару секунд",
+    "TIMEOUT": "Бот не ответил, попробуйте ещё раз",
+    "NOT_ALLOWED": "Здесь не играется: откройте виджет в чате с ботом",
+}
+# вид: (подпись под виджетом, подписи внутри виджета)
+WIDGETS = {
+    "slot": ("🎰 Слоты. Три одинаковых — ×10, три семёрки — ×20, пара возвращает ставку",
+             {"spin": "Крутить", "jp": "Джекпот!", "three": "Три в ряд:", "pair": "Пара, ставка вернулась",
+              "miss": "Мимо,"}),
+    "coin": ("🪙 Орёл или решка. Угадали сторону — ставка удваивается",
+             {"h": "Орёл", "t": "Решка", "got_h": "Выпал орёл", "got_t": "Выпала решка", "bal": "Баланс:"}),
+}
+
+
+def _bot_api(method, **params):
+    """Метод Bot API в обход обёрток библиотеки (их для виджетов ещё нет)."""
+    params = {key: json.dumps(value) if isinstance(value, (bool, dict, list)) else value
+              for key, value in params.items() if value is not None}
+    return telebot.apihelper._make_request(TOKEN, method, method="post", params=params)
+
+
+@functools.lru_cache(maxsize=16)
+def _widget_html(kind, lang):
+    texts = {**WIDGET_COMMON, **WIDGETS[kind][1]}
+    if lang != "ru":
+        texts = {key: I18N.text(value, lang) for key, value in texts.items()}
+    return widgets_core.build(kind, texts)
+
+
+def send_widget(chat_id, uid, kind):
+    lang = _i18n_lang(uid)
+    caption = WIDGETS[kind][0]
+    return _bot_api("sendWidget", chat_id=chat_id, html=_widget_html(kind, lang), allow_queries=True,
+                    caption=caption if lang == "ru" else I18N.text(caption, lang))
+
+
+def _widget_answer(uid, data):
+    """Ответ виджету на запрос data — словарь, который уйдёт ему JSON-ом."""
+    if _is_user_banned(uid)[0]:
+        return {"e": "banned"}
+    balance = lambda: int(load_user_record(uid).get("coins", 0) or 0)
+    if data == "bal":
+        return {"c": balance()}
+    if _webapp_subscription(uid):
+        return {"e": "subscribe"}
+    if _maintenance_applies(uid):
+        return {"e": "maintenance"}
+    parts = data.split(":")
+    side = parts[1] if parts[0] == "coin" and len(parts) == 3 and parts[1] in ("h", "t") else None
+    if not (parts[0] == "spin" and len(parts) == 2 or side):
+        return {"e": "err"}
+    bet = _parse_bet(parts[-1])
+    if bet is None:
+        return {"e": "err"}
+    with _chat_casino_lock:
+        if not _chat_take_bet(uid, bet)[0]:
+            return {"e": "coins"}
+        if side:
+            got, result = casino.coin_flip("heads" if side == "h" else "tails")
+            _luck_settle(uid, "coin", bet, result, f"wdg_{short_id()}")
+            return {"g": got[0], "c": balance()}
+        reels, multiplier = casino.slot_spin()
+        result = "wins" if multiplier > 1 else "draws" if multiplier == 1 else "losses"
+        win = _luck_settle(uid, "slot", bet, result, f"wdg_{short_id()}", {"reels": "".join(reels)}, bet * multiplier)
+        return {"r": reels, "m": multiplier, "w": win, "c": balance()}
+
+
+def _widget_query(query):
+    uid = int((query.get("from") or {}).get("id") or 0)
+    try:
+        answer = _widget_answer(uid, str(query.get("data") or ""))
+    except Exception as e:
+        log_exception("widget_query", e, user_id=uid)
+        answer = {"e": "err"}
+    # Ответить нужно на каждый запрос, иначе через 15 секунд виджет покажет TIMEOUT
+    try:
+        _bot_api("answerWidgetQuery", widget_query_id=query["id"],
+                 data=json.dumps(answer, ensure_ascii=False, separators=(",", ":")))
+    except Exception as e:
+        log_exception("answer_widget_query", e, user_id=uid)
+
+
+_update_de_json = types.Update.de_json.__func__
+
+
+def _update_de_json_with_widgets(cls, json_string):
+    raw = json.loads(json_string) if isinstance(json_string, str) else json_string
+    update = _update_de_json(cls, raw)
+    if update is not None and isinstance(raw, dict):
+        update.widget_query = raw.get("widget_query") or raw.get("shared_widget_query")
+    return update
+
+
+types.Update.de_json = classmethod(_update_de_json_with_widgets)
+_widgets_process_updates = bot.process_new_updates
+
+
+def _process_updates_with_widgets(updates):
+    for update in updates:
+        query = getattr(update, "widget_query", None)
+        if query:
+            bot._exec_task(_widget_query, query)
+    # Дальше апдейт идёт как обычно: обработчиков у него нет, но offset сдвинется
+    return _widgets_process_updates(updates)
+
+
+bot.process_new_updates = _process_updates_with_widgets
+
+
+@bot.message_handler(commands=["widgets"])
+def widgets_command(message):
+    uid = message.from_user.id
+    if not _guard_user(uid, chat_id=message.chat.id, action="widgets"):
+        return
+    if message.chat.type != "private":
+        bot.reply_to(message, "Игры в сообщении пока работают только в личке с ботом. Откройте чат с ботом и отправьте /widgets")
+        return
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🎰 Слоты", callback_data="wdg_slot"),
+           types.InlineKeyboardButton("🪙 Орёл и решка", callback_data="wdg_coin"))
+    bot.send_message(message.chat.id, "Игры прямо в сообщении: играются в чате, без Mini App. "
+                                      "Если вместо игры пустой блок, обновите Telegram.", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data in ("wdg_slot", "wdg_coin"))
+def widget_send_callback(call):
+    uid = call.from_user.id
+    if not _guard_user(uid, call_id=call.id, action="widgets"):
+        return
+    try:
+        send_widget(call.message.chat.id, uid, call.data[4:])
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_exception("send_widget", e, user_id=uid)
+        bot.answer_callback_query(call.id, "Не получилось отправить игру, попробуйте позже", show_alert=True)
 
 
 def play_inline_easter_egg(inline_id):
