@@ -1,0 +1,66 @@
+<style>
+body{margin:0;padding:0}
+#w{position:relative;height:420px;overflow:hidden;background:linear-gradient(#1c1838,#2c2266)}
+canvas{display:block}
+#s{position:absolute;top:22px;left:0;right:0;text-align:center;font:800 52px/1 system-ui;color:#fff;font-variant-numeric:tabular-nums}
+#f{position:absolute;top:84px;left:0;right:0;text-align:center;font-weight:700;color:#ffd36b}
+#h{position:absolute;bottom:14px;left:0;right:0;text-align:center;font-size:.9em;color:#b9b3e6}
+</style>
+<div id="w"><canvas id="c"></canvas><div id="s">0</div><div id="f"></div><div id="h"></div></div>
+<script>
+const W=TelegramWidget,T=__T__,$=i=>document.getElementById(i),cv=$('c'),g=cv.getContext('2d');
+const BH=16,R=130,dpr=Math.min(window.devicePixelRatio||1,2);
+let w,h,k,best=0,st,cam=0,last=0;
+try{best=+localStorage.getItem('b')||0}catch(e){}
+function size(){w=$('w').offsetWidth;h=420;cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+'px';cv.style.height=h+'px';g.setTransform(dpr,0,0,dpr,0,0);k=w/330}
+const col=(n,l)=>'hsl('+((210+n*9)%360)+',62%,'+l+'%)';
+function P(x,y,z,c){return[w/2+(x-z)*.866*k,h*.58+(x+z)*.5*k-(y-c)*k]}
+function poly(p,f){g.fillStyle=f;g.beginPath();g.moveTo(p[0][0],p[0][1]);for(let i=1;i<4;i++)g.lineTo(p[i][0],p[i][1]);g.closePath();g.fill()}
+function box(b,c){
+  const x0=b.x-b.w/2,x1=b.x+b.w/2,z0=b.z-b.d/2,z1=b.z+b.d/2,y=b.y,t=y+BH;
+  poly([P(x0,t,z0,c),P(x1,t,z0,c),P(x1,t,z1,c),P(x0,t,z1,c)],col(b.n,66));
+  poly([P(x1,t,z0,c),P(x1,t,z1,c),P(x1,y,z1,c),P(x1,y,z0,c)],col(b.n,48));
+  poly([P(x0,t,z1,c),P(x1,t,z1,c),P(x1,y,z1,c),P(x0,y,z1,c)],col(b.n,36));
+}
+function reset(){
+  st={tw:[{x:0,z:0,w:100,d:100,y:0,n:0}],bits:[],cur:null,over:0,t:0};
+  for(let i=1;i<6;i++)st.tw.unshift({x:0,z:0,w:100,d:100,y:-i*BH,n:-i});
+  spawn();$('s').textContent=0;hint();
+}
+function peak(){return st.tw[st.tw.length-1]}
+function spawn(){const p=peak(),n=p.n+1;st.cur={...p,y:p.y+BH,n,ax:n%2?'x':'z',t:0,v:2.4+Math.min(n,40)*.07}}
+function score(){return peak().n}
+function hint(){$('h').textContent=st.over?T.again:T.tap+(best?' · '+T.best+' '+best:'')}
+function drop(){
+  const c=st.cur,p=peak(),a=c.ax,s=a=='x'?'w':'d',dl=c[a]-p[a],ov=p[s]-Math.abs(dl);
+  if(ov<=0){st.bits.push({...c,vy:0});st.cur=null;return end()}
+  if(Math.abs(dl)<4){c[a]=p[a];$('f').textContent=T.perfect;W.HapticFeedback.impactOccurred('medium')}
+  else{
+    const cut={...c,vy:0};cut[s]=c[s]-ov;cut[a]=c[a]+Math.sign(dl)*ov/2;
+    c[s]=ov;c[a]=p[a]+dl/2;st.bits.push(cut);$('f').textContent='';W.HapticFeedback.impactOccurred('light');
+  }
+  delete c.t;st.tw.push(c);if(st.tw.length>24)st.tw.shift();
+  $('s').textContent=score();spawn();
+}
+function end(){
+  st.over=1;const n=score();
+  if(n>best){best=n;try{localStorage.setItem('b',n)}catch(e){};$('f').textContent=T.record;W.HapticFeedback.notificationOccurred('success')}
+  else{$('f').textContent=T.over+': '+n;W.HapticFeedback.notificationOccurred('error')}
+  hint();
+  W.request('tower:'+n).then(a=>{const o=JSON.parse(a.result||'{}');if(o.b>best){best=o.b;hint()}},()=>{});
+}
+$('w').addEventListener('click',()=>{if(st.over){reset();return}if(st.cur)drop()});
+// Скорость считаем от времени, а не от кадров: на 120 Гц блок не должен ездить вдвое быстрее
+function frame(ts){
+  const c=st.cur,dt=Math.min(3,(ts-(last||ts))/16.7);last=ts;
+  if(c){c.t+=c.v*dt;const q=c.t%(4*R),o=q<2*R?q-R:3*R-q;c[c.ax]=peak()[c.ax]+o}
+  cam+=(score()*BH-cam)*Math.min(1,.12*dt);
+  g.clearRect(0,0,w,h);
+  for(const b of st.tw)if(b.y>cam-14*BH)box(b,cam);
+  if(c)box(c,cam);
+  st.bits=st.bits.filter(b=>{b.vy+=.6*dt;b.y-=b.vy*dt;box(b,cam);return b.y>cam-30*BH});
+  requestAnimationFrame(frame);
+}
+size();reset();requestAnimationFrame(frame);W.ready();
+W.request('tower').then(a=>{const o=JSON.parse(a.result||'{}');if(o.b>best){best=o.b;hint()}},()=>{});
+</script>

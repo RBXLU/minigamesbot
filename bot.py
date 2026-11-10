@@ -334,6 +334,7 @@ GAME_TITLES_LANG = {
         "room_quiz": "Вікторина (чат)",
         "room_combo": "Комбо-битва (чат)",
         "room_mafia": "Мафія (чат)",
+        "tower": "Вежа",
         "plinko": "Плінко", "synth": "Синтез", "rocket": "Ракетка", "roulette": "Російська рулетка",
     },
     "ru": {
@@ -354,6 +355,7 @@ GAME_TITLES_LANG = {
         "room_quiz": "Викторина (чат)",
         "room_combo": "Комбо-битва (чат)",
         "room_mafia": "Мафия (чат)",
+        "tower": "Башня",
         "plinko": "Плинко", "synth": "Синтез", "rocket": "Ракетка", "roulette": "Русская рулетка",
     },
     "en": {
@@ -374,6 +376,7 @@ GAME_TITLES_LANG = {
         "room_quiz": "Quiz (chat)",
         "room_combo": "Combo Battle (chat)",
         "room_mafia": "Mafia (chat)",
+        "tower": "Tower",
         "plinko": "Plinko", "synth": "Synthesis", "rocket": "Rocket", "roulette": "Russian Roulette",
     }
 }
@@ -14117,7 +14120,11 @@ WIDGETS = {
               "miss": "Мимо,"}),
     "coin": ("🪙 Орёл или решка. Угадали сторону — ставка удваивается",
              {"h": "Орёл", "t": "Решка", "got_h": "Выпал орёл", "got_t": "Выпала решка", "bal": "Баланс:"}),
+    "tower": ("🏗 Башня. Нажимайте, когда блок над башней: что свисает, срезается. Рекорд идёт в топ недели",
+              {"tap": "Нажмите, чтобы уронить", "best": "рекорд", "perfect": "Идеально!", "record": "Новый рекорд!",
+               "over": "Башня упала", "again": "Нажмите, чтобы начать заново"}),
 }
+WIDGET_HEIGHT = {"tower": 420}        # высота известна заранее — место под виджет не прыгает
 
 
 def _bot_api(method, **params):
@@ -14139,7 +14146,7 @@ def send_widget(chat_id, uid, kind):
     lang = _i18n_lang(uid)
     caption = WIDGETS[kind][0]
     return _bot_api("sendWidget", chat_id=chat_id, html=_widget_html(kind, lang), allow_queries=True,
-                    caption=caption if lang == "ru" else I18N.text(caption, lang))
+                    height=WIDGET_HEIGHT.get(kind), caption=caption if lang == "ru" else I18N.text(caption, lang))
 
 
 def _widget_answer(uid, data):
@@ -14149,8 +14156,15 @@ def _widget_answer(uid, data):
     balance = lambda: int(load_user_record(uid).get("coins", 0) or 0)
     if data == "bal":
         return {"c": balance()}
+    if data == "tower":
+        return {"b": _records_of(load_user_record(uid)).get("tower")}
     if _webapp_subscription(uid):
         return {"e": "subscribe"}
+    if data.startswith("tower:"):
+        # Счёт считает виджет на устройстве: монет за него нет, а рекорд проходит проверку на правдоподобие
+        _record_game_play_once(uid, "tower", f"wdg_{short_id()}")
+        new = _save_record(uid, "tower", data[6:])
+        return {"b": _records_of(load_user_record(uid)).get("tower"), "n": bool(new)}
     if _maintenance_applies(uid):
         return {"e": "maintenance"}
     parts = data.split(":")
@@ -14226,11 +14240,12 @@ def widgets_command(message):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🎰 Слоты", callback_data="wdg_slot"),
            types.InlineKeyboardButton("🪙 Орёл и решка", callback_data="wdg_coin"))
+    kb.row(types.InlineKeyboardButton("🏗 Башня", callback_data="wdg_tower"))
     bot.send_message(message.chat.id, "Игры прямо в сообщении: играются в чате, без Mini App. "
                                       "Если вместо игры пустой блок, обновите Telegram.", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data in ("wdg_slot", "wdg_coin"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("wdg_") and c.data[4:] in WIDGETS)
 def widget_send_callback(call):
     uid = call.from_user.id
     if not _guard_user(uid, call_id=call.id, action="widgets"):
@@ -14935,6 +14950,7 @@ WEBAPP_RECORD_GAMES = {
     "tetris": (True, 10_000_000, "очков"),
     "flappy": (True, 100_000, "очков"),
     "reaction": (False, 100, "мс"),
+    "tower": (True, 1000, "этажей"),      # виджет «Башня» в чате
 }
 
 

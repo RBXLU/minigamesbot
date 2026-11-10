@@ -1328,7 +1328,7 @@ function openChatCommand(command) {
 
 /* ---------- профиль ---------- */
 
-const RECORD_GAMES = { g2048: '2048', snake: 'Змейка', tetris: 'Тетрис', flappy: 'Flappy Bird', reaction: 'Блиц-реакция' };
+const RECORD_GAMES = { g2048: '2048', snake: 'Змейка', tetris: 'Тетрис', flappy: 'Flappy Bird', reaction: 'Блиц-реакция', tower: 'Башня' };
 
 function buildProfile(root) {
   if (!PROFILE) {
@@ -1427,7 +1427,8 @@ function openRecords(game, name) {
         });
         root.appendChild(past);
       }
-      root.appendChild(button('▶️ Попробовать побить', 'btn wide', () => openGame(game, name)));
+      if (GAMES[game]) root.appendChild(button('▶️ Попробовать побить', 'btn wide', () => openGame(game, name)));
+      else root.appendChild(el('div', 'hint', 'В эту игру играют в чате с ботом: команда /widgets'));
     }).catch(e => { status.textContent = e.message; });
   });
 }
