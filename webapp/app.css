@@ -1208,3 +1208,9 @@ canvas.plinko-board { margin-top: 4px; }
 .prize-row .place-1 .fa-solid { color: #e6b422; }
 .prize-row .place-2 .fa-solid { color: #a8b0ba; }
 .prize-row .place-3 .fa-solid { color: #c27c46; }
+
+/* башня */
+.tower-wrap { position: relative; max-width: 400px; margin: 4px auto 0; border-radius: 18px; overflow: hidden; background: linear-gradient(#1c1838, #2c2266); }
+canvas.tower-canvas { background: transparent; border: 0; border-radius: 0; touch-action: none; }
+.tower-score { position: absolute; top: 22px; left: 0; right: 0; text-align: center; font: 800 52px/1 var(--font); color: #fff; font-variant-numeric: tabular-nums; pointer-events: none; }
+.tower-flash { position: absolute; top: 84px; left: 0; right: 0; text-align: center; font-weight: 800; color: #ffd36b; pointer-events: none; }

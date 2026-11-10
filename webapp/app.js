@@ -605,7 +605,7 @@ const GAME_ICONS = {
   plinko: 'circle-dot', synth: 'atom', rocket: 'rocket', roulette: 'gun', coin: 'coins',
   blackjack: 'heart', poker: 'clover', rps: 'hand-scissors', ttt: 'xmark', pong: 'table-tennis-paddle-ball',
   combogame: 'khanda', quizgame: 'brain', millionaire: 'sack-dollar', bship: 'ship', chess: 'chess-knight',
-  mafia: 'masks-theater', wordgame: 'comments', iduel: 'hand-fist'
+  mafia: 'masks-theater', wordgame: 'comments', iduel: 'hand-fist', tower: 'layer-group'
 };
 
 function gameTile(key, emoji, name, category, extra) {
@@ -2183,6 +2183,117 @@ function hiDpiCanvas(width, height) {
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }
+
+/* Башня — блок ездит над вершиной, по нажатию падает, лишнее срезается */
+GAMES.tower = function (root, ctx) {
+  const BH = 16, R = 130, H = 420;
+  const width = Math.min(screenEl.clientWidth - 28, 400);
+  const [canvas, g] = hiDpiCanvas(width, H);
+  canvas.className = 'tower-canvas';
+  const wrap = el('div', 'tower-wrap');
+  wrap.appendChild(canvas);
+  const scoreEl = el('div', 'tower-score', '0');
+  const flashEl = el('div', 'tower-flash');
+  wrap.appendChild(scoreEl);
+  wrap.appendChild(flashEl);
+  root.appendChild(wrap);
+  const status = statusLine(root, 'Нажмите, чтобы уронить блок');
+  hintLine(root, currentLayout() === 'desktop' ? 'Пробел или клик — уронить блок' : 'Нажимайте, когда блок над башней');
+  const k = width / 330;
+  let st, cam = 0, last = 0, raf = null;
+
+  const col = (n, l) => 'hsl(' + ((210 + n * 9) % 360) + ',62%,' + l + '%)';
+  const P = (x, y, z) => [width / 2 + (x - z) * 0.866 * k, H * 0.58 + (x + z) * 0.5 * k - (y - cam) * k];
+  function poly(points, fill) {
+    g.fillStyle = fill;
+    g.beginPath();
+    points.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    g.closePath();
+    g.fill();
+  }
+  function box(b) {
+    const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2, z0 = b.z - b.d / 2, z1 = b.z + b.d / 2, t = b.y + BH;
+    poly([P(x0, t, z0), P(x1, t, z0), P(x1, t, z1), P(x0, t, z1)], col(b.n, 66));
+    poly([P(x1, t, z0), P(x1, t, z1), P(x1, b.y, z1), P(x1, b.y, z0)], col(b.n, 48));
+    poly([P(x0, t, z1), P(x1, t, z1), P(x1, b.y, z1), P(x0, b.y, z1)], col(b.n, 36));
+  }
+  const peak = () => st.tower[st.tower.length - 1];
+  const score = () => peak().n;
+
+  function spawn() {
+    const p = peak(), n = p.n + 1;
+    st.cur = Object.assign({}, p, { y: p.y + BH, n, ax: n % 2 ? 'x' : 'z', t: 0, v: 2.4 + Math.min(n, 40) * 0.07 });
+  }
+  function reset() {
+    st = { tower: [], bits: [], cur: null, over: false };
+    for (let i = 5; i >= 0; i--) st.tower.push({ x: 0, z: 0, w: 100, d: 100, y: -i * BH, n: -i });
+    spawn();
+    scoreEl.textContent = '0';
+    flashEl.textContent = '';
+    status.classList.remove('win', 'lose');
+    status.textContent = 'Нажмите, чтобы уронить блок';
+  }
+  function drop() {
+    if (st.over) return reset();
+    const c = st.cur, p = peak(), a = c.ax, side = a === 'x' ? 'w' : 'd';
+    const delta = c[a] - p[a], overlap = p[side] - Math.abs(delta);
+    if (overlap <= 0) {
+      st.bits.push(Object.assign({}, c, { vy: 0 }));
+      st.cur = null;
+      return end();
+    }
+    if (Math.abs(delta) < 4) {
+      c[a] = p[a];
+      flashEl.textContent = 'Идеально!';
+      sound('coin');
+      thud();
+    } else {
+      const cut = Object.assign({}, c, { vy: 0 });
+      cut[side] = c[side] - overlap;
+      cut[a] = c[a] + Math.sign(delta) * overlap / 2;
+      c[side] = overlap;
+      c[a] = p[a] + delta / 2;
+      st.bits.push(cut);
+      flashEl.textContent = '';
+      sound('tick');
+      thud();
+    }
+    st.tower.push(c);
+    if (st.tower.length > 24) st.tower.shift();
+    scoreEl.textContent = String(score());
+    spawn();
+  }
+  function end() {
+    st.over = true;
+    const n = score();
+    const result = n >= 15 ? 'wins' : 'losses';
+    showOutcome(status, `Башня упала: ${n} ${plural(n, 'этаж', 'этажа', 'этажей')}. Нажмите, чтобы начать заново`, result);
+    if (result === 'losses') haptic('lose');
+    ctx.finish(result, { score: String(n) });
+  }
+  function frame(ts) {
+    const c = st.cur, dt = Math.min(3, (ts - (last || ts)) / 16.7);
+    last = ts;
+    if (c) {
+      c.t += c.v * dt;
+      const q = c.t % (4 * R);
+      c[c.ax] = peak()[c.ax] + (q < 2 * R ? q - R : 3 * R - q);
+    }
+    cam += (score() * BH - cam) * Math.min(1, 0.12 * dt);
+    g.clearRect(0, 0, width, H);
+    st.tower.forEach(b => { if (b.y > cam - 14 * BH) box(b); });
+    if (c) box(c);
+    st.bits = st.bits.filter(b => { b.vy += 0.6 * dt; b.y -= b.vy * dt; box(b); return b.y > cam - 30 * BH; });
+    raf = requestAnimationFrame(frame);
+  }
+
+  canvas.addEventListener('pointerdown', event => { event.preventDefault(); drop(); });
+  bindKeys({ ' ': drop, Enter: drop });
+  reset();
+  raf = requestAnimationFrame(frame);
+  ctx.started();
+  return () => cancelAnimationFrame(raf);
+};
 
 /* Плинко — путь шарика выбирает сервер */
 GAMES.plinko = function (root) {

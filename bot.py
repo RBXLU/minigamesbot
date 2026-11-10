@@ -1162,9 +1162,10 @@ _BUTTON_STYLE_RULES = (
     ("success", ("admin_mnt_off", "admin_unban_user", "idea_send", "admin_idea_accept_", "hub_gift",
                  "hub_pass_claim", "hw_claim", "claim_", "check_subscription",
                  "reaction_begin_", "quizgame_start_", "mafia_start_", "roomquiz_start_", "roommafia_start_",
-                 "room_continue_yes_", "grp_play_")),
+                 "room_continue_yes_", "grp_play_", "rkt_c_")),
     # синие: главное действие экрана
-    ("primary", ("idea_start", "hub_event", "hw_open", "cbet_", "sbet_", "bj_bet_", "bj_hit_")),
+    ("primary", ("idea_start", "hub_event", "hw_open", "cbet_", "sbet_", "bj_bet_", "bj_hit_", "pbet_", "snt_",
+                 "rkt_s_")),
 )
 
 
@@ -1261,6 +1262,7 @@ WEBAPP_GAMES = [
     ("minesweeper", "Сапёр", "💣", "solo"),
     ("guess", "Угадай число", "🎯", "solo"),
     ("reaction", "Блиц-реакция", "⚡", "solo"),
+    ("tower", "Башня", "🏗", "solo"),
     ("slot", "Слоты", "🎰", "luck"),
     ("plinko", "Плинко", "🔵", "luck"),
     ("synth", "Синтез", "🌀", "luck"),
@@ -6073,8 +6075,7 @@ def _launch_private_bship(match):
     game = _bship_new_game(p1, name1)
     game["p2"] = p2
     game["p2_name"] = name2
-    game["ships"][p2] = _bship_random_ships(game["size"], game["ships_count"])
-    game["shots"][p2] = set()
+    _bship_place(game, p2)
     game["status"] = "playing"
     game["turn"] = random.choice([p1, p2])
     game["private_mode"] = True
@@ -7479,7 +7480,7 @@ _MAINTENANCE_CALLBACK_PREFIXES = (
     "quizgame_start_", "quizgame_new", "combogame_join_", "bship_join_", "bship_new_",
     "chess_join_", "chess_new_", "mafia_join_", "mafia_start_", "poker_new_", "pmttt_new_",
     "bj_new_", "wrdl_new_", "g2048_new_", "tetris_new", "hangman_new", "minesweeper_new",
-    "reaction_begin_", "cbet_", "sbet_", "rrl_join_", "grp_play_", "room_continue_yes_",
+    "reaction_begin_", "cbet_", "sbet_", "rrl_join_", "pbet_", "snt_", "rkt_s_", "grp_play_", "room_continue_yes_",
     "roomrps_join_", "roomduel_join_", "roombship_join_", "roomquiz_join_", "roomquiz_start_",
     "roomcombo_join_", "roommafia_start_", "os_game_", "biz_coin_flip", "biz_slot_spin",
 )
@@ -9898,6 +9899,21 @@ def inline_handler(query):
             input_message_content=types.InputTextMessageContent(SLOT_INTRO),
             reply_markup=slot_bet_kb()
         ))
+        for key, emoji, intro, kb in (("plinko", "🔵", PLINKO_INTRO, plinko_bet_kb()),
+                                       ("synth", "🌀", SYNTH_INTRO, synth_bet_kb()),
+                                       ("rocket", "🚀", ROCKET_INTRO, rocket_bet_kb())):
+            results.append(types.InlineQueryResultArticle(
+                id=f"{key}_{short_id()}", title=f"{emoji} {get_game_title(uid, key)}", description=bet_hint,
+                input_message_content=types.InputTextMessageContent(intro), reply_markup=kb))
+        rrgid = short_id()
+        rr_duel = roulette_duels[rrgid] = _roulette_new_duel(starter_id, user.first_name or str(starter_id), 50)
+        results.append(types.InlineQueryResultArticle(
+            id=f"rrl_{rrgid}", title=f"🔫 {get_game_title(uid, 'roulette')} · 50 🪙",
+            description=localized_text(uid, "Дуэль на двоих. Другие ставки: напишите «рулетка»",
+                                       "Duel for two. Other bets: type “roulette”",
+                                       "Дуель на двох. Інші ставки: напишіть «рулетка»"),
+            input_message_content=types.InputTextMessageContent(_roulette_text(rr_duel)),
+            reply_markup=_roulette_kb(rrgid, rr_duel)))
 
         results.append(types.InlineQueryResultArticle(
             id=f"snake_{short_id()}",
@@ -12856,13 +12872,36 @@ def wordle_callback(call):
         log_exception("wordle_callback", e)
         bot.answer_callback_query(call.id, "Ошибка Wordle")
 
-def _bship_random_ships(size=5, ships_count=5):
-    max_cells = max(1, size * size)
-    ships_count = max(1, min(ships_count, max_cells))
-    ships = set()
-    while len(ships) < ships_count:
-        ships.add((random.randint(0, size - 1), random.randint(0, size - 1)))
-    return ships
+# Морской бой на двоих: общее сообщение в чате и у каждого игрока своё поле в личке.
+# В личке поле соперника — кнопки (по ним стреляют), а свой флот нарисован текстом.
+BSHIP_SIZE = 6
+BSHIP_FLEET = (3, 2, 2, 1, 1)
+BSHIP_LEGEND = "🟦 вода · 🚢 корабль · 🔥 ранен · 💥 потоплен · ⚪ мимо"
+
+
+def _bship_random_fleet(size=BSHIP_SIZE, lengths=BSHIP_FLEET):
+    """Корабли не касаются друг друга даже углами, как в обычном морском бое."""
+    for _ in range(100):
+        taken, fleet = set(), []
+        for length in lengths:
+            options = []
+            for r in range(size):
+                for c in range(size):
+                    for dr, dc in ((0, 1), (1, 0)):
+                        cells = [(r + dr * i, c + dc * i) for i in range(length)]
+                        if all(x < size and y < size for x, y in cells) and not any(
+                                (x + a, y + b) in taken for x, y in cells for a in (-1, 0, 1) for b in (-1, 0, 1)):
+                            options.append(cells)
+                            if length == 1:
+                                break
+            if not options:
+                break
+            ship = random.choice(options)
+            fleet.append(ship)
+            taken.update(ship)
+        else:
+            return fleet
+    return [[(i * 2 % size, i * 2 // size * 3)] for i in range(len(lengths))]
 
 
 def _bship_norm_cells(value):
@@ -12879,174 +12918,165 @@ def _bship_norm_cells(value):
     return out
 
 
-def _bship_new_game(owner_id, owner_name, size=5, ships_count=5):
-    size = max(3, min(8, int(size)))
-    ships_count = max(1, min(int(ships_count), size * size))
-    return {
-        "p1": owner_id,
-        "p2": None,
-        "p1_name": owner_name,
-        "p2_name": "",
-        "size": size,
-        "ships_count": ships_count,
-        "ships": {owner_id: _bship_random_ships(size, ships_count)},
-        "shots": {owner_id: set()},
-        "turn": owner_id,
-        "status": "waiting",
-        "winner": None,
-    }
+def _bship_place(game, player):
+    """Новый флот и чистое поле выстрелов игрока."""
+    fleet = _bship_random_fleet(game["size"])
+    game.setdefault("fleet", {})[player] = fleet
+    game.setdefault("ships", {})[player] = {cell for ship in fleet for cell in ship}
+    game.setdefault("shots", {})[player] = set()
+
+
+def _bship_new_game(owner_id, owner_name, size=BSHIP_SIZE, ships_count=None):
+    game = {"p1": owner_id, "p2": None, "p1_name": owner_name, "p2_name": "", "size": BSHIP_SIZE,
+            "ships_count": len(BSHIP_FLEET), "turn": owner_id, "status": "waiting", "winner": None, "last": ""}
+    _bship_place(game, owner_id)
+    return game
 
 
 def _bship_ensure_game_shape(game):
-    if not isinstance(game, dict):
+    if not isinstance(game, dict) or game.get("p1") is None:
         return False
-    if not isinstance(game.get("ships"), dict):
-        game["ships"] = {}
-    if not isinstance(game.get("shots"), dict):
-        game["shots"] = {}
-    game["size"] = max(3, min(8, int(game.get("size", 5) or 5)))
-    game["ships_count"] = max(1, min(int(game.get("ships_count", 5) or 5), game["size"] * game["size"]))
-    game["status"] = game.get("status") if game.get("status") in ("waiting", "playing", "ended") else "waiting"
-
-    p1 = game.get("p1")
-    p2 = game.get("p2")
-    if p1 is None:
-        return False
-
-    if not game.get("p1_name"):
-        game["p1_name"] = str(p1)
-    if p2 is not None and not game.get("p2_name"):
-        game["p2_name"] = str(p2)
-
+    game["size"] = BSHIP_SIZE
+    game["ships_count"] = len(BSHIP_FLEET)
+    if game.get("status") not in ("waiting", "playing", "ended"):
+        game["status"] = "waiting"
+    p1, p2 = game.get("p1"), game.get("p2")
+    game["p1_name"] = game.get("p1_name") or str(p1)
+    if p2 is not None:
+        game["p2_name"] = game.get("p2_name") or str(p2)
     for player in (p1, p2):
         if player is None:
             continue
-        game["ships"][player] = _bship_norm_cells(game["ships"].get(player))
-        game["shots"][player] = _bship_norm_cells(game["shots"].get(player))
-        if not game["ships"][player]:
-            game["ships"][player] = _bship_random_ships(game["size"], game["ships_count"])
-
+        fleet = (game.get("fleet") or {}).get(player)
+        if not fleet:
+            _bship_place(game, player)
+            continue
+        game["fleet"][player] = [sorted(_bship_norm_cells(ship)) for ship in fleet]
+        game["ships"][player] = {cell for ship in game["fleet"][player] for cell in ship}
+        game["shots"][player] = _bship_norm_cells(game.get("shots", {}).get(player))
     if game.get("turn") not in (p1, p2):
         game["turn"] = p1
-
     if game["status"] == "playing" and p2 is None:
         game["status"] = "waiting"
-
     if game["status"] == "waiting":
         game["winner"] = None
     return True
 
 
-def _bship_cell_view(is_own, has_ship, was_shot_by_self, was_shot_by_enemy):
-    if is_own:
-        if has_ship and was_shot_by_enemy:
-            return "💥"
-        if has_ship:
-            return "🚢"
-        if was_shot_by_enemy:
-            return "•"
-        return "▫️"
-    if was_shot_by_self:
-        return "💥" if has_ship else "•"
-    return "❔"
+def _bship_enemy(game, uid):
+    return game.get("p2") if uid == game.get("p1") else game.get("p1")
+
+
+def _bship_name(game, uid):
+    return game.get("p1_name") if uid == game.get("p1") else game.get("p2_name") or "Игрок 2"
+
+
+def _bship_sunk_cells(game, owner):
+    """Клетки потопленных кораблей игрока owner."""
+    shots = game["shots"].get(_bship_enemy(game, owner), set())
+    return {cell for ship in game["fleet"].get(owner, []) if set(ship) <= shots for cell in ship}
+
+
+def _bship_afloat(game, owner):
+    shots = game["shots"].get(_bship_enemy(game, owner), set())
+    return sum(1 for ship in game["fleet"].get(owner, []) if not set(ship) <= shots)
 
 
 def _bship_header(game, p2_placeholder):
-    """Общая шапка: размер поля, имена и текущий статус партии."""
-    p1_name = game.get("p1_name", "Игрок 1")
-    p2_name = game.get("p2_name", "Игрок 2") if game.get("p2") else p2_placeholder
-    text = f"🚢 Морской бой ({game['size']}x{game['size']})\nКораблей: {game['ships_count']} у каждого\n\n"
-    text += f"{p1_name} vs {p2_name}\n"
-
+    """Шапка общего сообщения: кто играет и что происходит."""
+    p2_name = game.get("p2_name") if game.get("p2") else p2_placeholder
+    text = f"🚢 Морской бой · {game.get('p1_name')} против {p2_name}\n"
     status = game.get("status")
     if status == "waiting":
-        return text + "\nНажмите «Присоединиться», чтобы начать."
+        return text + "\nНажмите «Присоединиться», чтобы сыграть."
     if status == "ended":
-        return text + f"\nПобедитель: {p1_name if game.get('winner') == game.get('p1') else p2_name}"
-    return text + f"\nХод: {p1_name if game.get('turn') == game.get('p1') else p2_name}"
+        return text + f"\n🏆 Победитель: {_bship_name(game, game.get('winner'))}"
+    n = len(BSHIP_FLEET)
+    return (text + f"\nХодит {_bship_name(game, game.get('turn'))}\n"
+            f"Кораблей на плаву: {game.get('p1_name')} — {_bship_afloat(game, game['p1'])} из {n}, "
+            f"{game.get('p2_name')} — {_bship_afloat(game, game['p2'])} из {n}")
 
 
 def _bship_public_text(game):
     _bship_ensure_game_shape(game)
-    text = _bship_header(game, "Ожидание второго игрока")
-    return text + "\n\nПоля скрыты. Играйте через личные сообщения с ботом."
+    text = _bship_header(game, "ждём соперника")
+    if game.get("last"):
+        text += "\n" + game["last"]
+    return text + "\n\nПоля в личке с ботом: там видно свой флот и стреляют по чужому."
 
 
 def _bship_public_keyboard(gid, game):
     _bship_ensure_game_shape(game)
     kb = types.InlineKeyboardMarkup()
     if game.get("status") == "waiting":
-        kb.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"bship_join_{gid}"))
-    kb.add(types.InlineKeyboardButton("Открыть ЛС", callback_data=f"bship_dm_{gid}"))
+        kb.add(types.InlineKeyboardButton("🤝 Присоединиться", callback_data=f"bship_join_{gid}"))
+    kb.add(types.InlineKeyboardButton("📩 Прислать поле в личку", callback_data=f"bship_dm_{gid}"))
     if game.get("status") == "ended":
-        kb.add(types.InlineKeyboardButton("Новая партия", callback_data=f"bship_new_{gid}"))
+        kb.add(types.InlineKeyboardButton("🔁 Новая партия", callback_data=f"bship_new_{gid}"))
     return kb
 
 
 def _bship_render_text(game, viewer_id):
     _bship_ensure_game_shape(game)
     p1, p2 = game.get("p1"), game.get("p2")
-    text = _bship_header(game, "Игрок 2") + "\n"
-
     if game.get("status") == "waiting":
-        return text
+        return _bship_header(game, "ждём соперника")
     if viewer_id not in (p1, p2):
-        return text + "\n(Вы не участник этой партии)"
-
-    size = game["size"]
-    enemy = p2 if viewer_id == p1 else p1
-    my_ships = game["ships"].get(viewer_id, set())
-    enemy_ships = game["ships"].get(enemy, set())
-    my_shots = game["shots"].get(viewer_id, set())
-    enemy_shots = game["shots"].get(enemy, set())
-
-    def grid(is_own):
-        rows = []
-        for r in range(size):
-            rows.append("".join(
-                _bship_cell_view(is_own, (r, c) in (my_ships if is_own else enemy_ships),
-                                 (r, c) in my_shots, (r, c) in enemy_shots)
-                for c in range(size)
-            ))
-        return "\n".join(rows) + "\n"
-
-    text += "\nЛегенда: 🚢 корабль, 💥 попадание, • мимо, ▫️ пусто, ❔ неизвестно\n"
-    text += "\nВаше поле\n" + grid(True)
-    text += "\nПоле соперника\n" + grid(False)
-    return text
+        return _bship_header(game, "Игрок 2") + "\n\n(Вы не участник этой партии)"
+    enemy = _bship_enemy(game, viewer_id)
+    lines = [f"🚢 Морской бой · вы против {_bship_name(game, enemy)}"]
+    if game["status"] == "ended":
+        lines.append("🏆 Вы победили!" if game.get("winner") == viewer_id else "Ваш флот потоплен. Реванш?")
+    elif game.get("turn") == viewer_id:
+        lines.append("🎯 Ваш ход: стреляйте по полю соперника кнопками ниже")
+    else:
+        lines.append(f"⏳ Ходит {_bship_name(game, enemy)}")
+    if game.get("last"):
+        lines.append(game["last"])
+    ships, hits = game["ships"].get(viewer_id, set()), game["shots"].get(enemy, set())
+    sunk = _bship_sunk_cells(game, viewer_id)
+    lines += ["", "Ваш флот:"]
+    for r in range(game["size"]):
+        row = ""
+        for c in range(game["size"]):
+            cell = (r, c)
+            row += ("💥" if cell in sunk else "🔥" if cell in ships and cell in hits else "🚢" if cell in ships
+                    else "⚪" if cell in hits else "🟦")
+        lines.append(row)
+    n = len(BSHIP_FLEET)
+    lines += ["", f"На плаву: у вас {_bship_afloat(game, viewer_id)} из {n}, у соперника {_bship_afloat(game, enemy)} из {n}",
+              BSHIP_LEGEND]
+    return "\n".join(lines)
 
 
 def _bship_keyboard(gid, game, viewer_id):
+    """Поле соперника кнопками. Пока ходит соперник, поле видно, но не нажимается."""
     _bship_ensure_game_shape(game)
     kb = types.InlineKeyboardMarkup()
     status = game.get("status")
-
     if status == "waiting":
-        kb.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"bship_join_{gid}"))
+        kb.add(types.InlineKeyboardButton("🤝 Присоединиться", callback_data=f"bship_join_{gid}"))
         return kb
-
+    if viewer_id not in (game.get("p1"), game.get("p2")):
+        return kb
+    enemy = _bship_enemy(game, viewer_id)
+    shots, ships = game["shots"].get(viewer_id, set()), game["ships"].get(enemy, set())
+    sunk = _bship_sunk_cells(game, enemy)
+    can_shoot = status == "playing" and game.get("turn") == viewer_id
+    for r in range(game["size"]):
+        row = []
+        for c in range(game["size"]):
+            cell = (r, c)
+            if cell in shots:
+                label = "💥" if cell in sunk else "🔥" if cell in ships else "⚪"
+                row.append(types.InlineKeyboardButton(label, callback_data="none"))
+            else:
+                row.append(types.InlineKeyboardButton("·", callback_data=f"bship_shot_{gid}_{r}_{c}" if can_shoot else "none"))
+        kb.row(*row)
     if status == "ended":
-        kb.add(types.InlineKeyboardButton("Новая партия", callback_data=f"bship_new_{gid}"))
-        return kb
-
-    p1 = game.get("p1")
-    p2 = game.get("p2")
-    if viewer_id not in (p1, p2):
-        return kb
-
-    if viewer_id != game.get("turn"):
-        kb.add(types.InlineKeyboardButton("Ход соперника", callback_data="none"))
-        return kb
-
-    size = game.get("size", 5)
-    shots = game.get("shots", {}).get(viewer_id, set())
-    for r in range(size):
-        kb.row(*[
-            types.InlineKeyboardButton("•", callback_data="none")
-            if (r, c) in shots
-            else types.InlineKeyboardButton("▫️", callback_data=f"bship_shot_{gid}_{r}_{c}")
-            for c in range(size)
-        ])
+        kb.add(types.InlineKeyboardButton("🔁 Реванш", callback_data=f"bship_new_{gid}"))
+    elif not can_shoot:
+        kb.add(types.InlineKeyboardButton("⏳ Ход соперника", callback_data="none"))
     return kb
 
 
@@ -13288,10 +13318,7 @@ def battleship_callback(call):
 
             game["p2"] = uid
             game["p2_name"] = call.from_user.first_name or call.from_user.username or str(uid)
-            size = game.get("size", 5)
-            ships_count = game.get("ships_count", 5)
-            game.setdefault("ships", {})[uid] = _bship_random_ships(size, ships_count)
-            game.setdefault("shots", {})[uid] = set()
+            _bship_place(game, uid)
             game["status"] = "playing"
             game["turn"] = game.get("p1")
 
@@ -13304,30 +13331,15 @@ def battleship_callback(call):
 
         if action == "new":
             if uid not in (game.get("p1"), game.get("p2")):
-                _safe_ack("\u042d\u0442\u043e \u043d\u0435 \u0432\u0430\u0448\u0430 \u043f\u0430\u0440\u0442\u0438\u044f")
+                _safe_ack("Это не ваша партия")
                 return
-
-            size = game.get("size", 5)
-            ships_count = game.get("ships_count", 5)
-            p1 = game.get("p1")
-            p2 = game.get("p2")
-
-            if not p2:
-                game.update(_bship_new_game(p1, game.get("p1_name", "\u0418\u0433\u0440\u043e\u043a 1"), size=size, ships_count=ships_count))
-                game["turn"] = uid
-                game["shots"] = {p1: set()}
-            else:
-                game["status"] = "playing"
-                game["ships"] = {
-                    p1: _bship_random_ships(size, ships_count),
-                    p2: _bship_random_ships(size, ships_count),
-                }
-                game["shots"] = {p1: set(), p2: set()}
-            game["turn"] = p1
-            game["winner"] = None
-
+            p1, p2 = game.get("p1"), game.get("p2")
+            for player in (p1, p2):
+                if player is not None:
+                    _bship_place(game, player)
+            game.update(status="playing" if p2 else "waiting", turn=p1, winner=None, last="")
             _bship_sync_views(gid, game, call=call)
-            _safe_ack("Новая партия. Обновил поля в ЛС")
+            _safe_ack("Новая партия. Обновил поля в личке")
             return
 
         if action == "shot":
@@ -13362,21 +13374,29 @@ def battleship_callback(call):
                 return
 
             my_shots.add((r, c))
-            enemy_ships = game.setdefault("ships", {}).setdefault(enemy, set())
-
-            if (r, c) in enemy_ships:
-                if enemy_ships.issubset(my_shots):
+            shooter = _bship_name(game, uid)
+            ship = next((ship for ship in game["fleet"].get(enemy, []) if (r, c) in ship), None)
+            if ship is None:
+                game["turn"] = enemy
+                game["last"] = f"{shooter} стреляет: мимо"
+                _safe_ack("Мимо")
+            elif set(ship) <= my_shots:
+                # Вокруг потопленного корабля кораблей быть не может — отмечаем клетки сразу
+                my_shots.update((x + a, y + b) for x, y in ship for a in (-1, 0, 1) for b in (-1, 0, 1)
+                                if 0 <= x + a < game["size"] and 0 <= y + b < game["size"])
+                game["last"] = f"{shooter} стреляет: потопил корабль на {len(ship)}!"
+                if not _bship_afloat(game, enemy):
                     game["status"] = "ended"
                     game["winner"] = uid
                     _record_game_result_once(uid, "bship", "wins", gid)
                     _record_game_result_once(enemy, "bship", "losses", gid)
                     _bship_sync_views(gid, game, call=call)
-                    _safe_ack("Попадание! Вы победили")
+                    _safe_ack("Последний корабль потоплен. Победа!")
                     return
-                _safe_ack("Попадание! Ходите еще")
+                _safe_ack("Потопил! Стреляйте ещё")
             else:
-                game["turn"] = enemy
-                _safe_ack("Мимо")
+                game["last"] = f"{shooter} стреляет: попал!"
+                _safe_ack("Попал! Стреляйте ещё")
 
             _bship_sync_views(gid, game, call=call)
             return
@@ -14091,6 +14111,286 @@ def slot_bet_callback(call):
         log_exception("slot_bet", e, user_id=user.id)
         try:
             bot.answer_callback_query(call.id, "Барабаны заело — попробуйте ещё раз")
+        except Exception:
+            pass
+
+
+# ----------------------------------- плинко -----------------------------------
+
+PLINKO_INTRO = (
+    "🔵 Плинко\n\n"
+    "Шарик отскакивает от десяти рядов штырьков и падает в лунку. На её число умножается ставка: "
+    "по краям ×25 и ×5, в середине ×0.4. Бросает тот, кто нажал."
+)
+
+
+def plinko_bet_kb(again=False):
+    kb = types.InlineKeyboardMarkup()
+    label = "🔁 Ещё · " if again else "🔵 Бросить · "
+    kb.row(*[types.InlineKeyboardButton(f"{label}{bet}", callback_data=f"pbet_{bet}") for bet in CHAT_BETS])
+    return kb
+
+
+def _plinko_slots_line(slot=None):
+    cells = [f"{m:g}×" for m in casino.PLINKO_MULTIPLIERS]
+    if slot is not None:
+        cells[slot] = f"<b>[{cells[slot]}]</b>"
+    return " ".join(cells)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pbet_"))
+def plinko_bet_callback(call):
+    user = call.from_user
+    if _deny_if_spam(user.id, call_id=call.id, action="luck"):
+        return
+    try:
+        bet = _parse_bet(call.data.split("_", 1)[1])
+        if bet is None:
+            bot.answer_callback_query(call.id)
+            return
+        if _deny_new_round(call):
+            return
+        with _chat_casino_lock:
+            ok, balance = _chat_take_bet(user.id, bet)
+        if not ok:
+            _no_coins_alert(call, balance, bet)
+            return
+        bot.answer_callback_query(call.id, f"Бросаем на {bet} 🪙!")
+        name = html.escape(_player_name(user))
+        path, slot, multiplier, win = casino.plinko_drop(bet)
+        head = f"🔵 {name} бросает шарик на {bet} 🪙"
+        arrows = "".join("↘" if step else "↙" for step in path)
+        for shown in (4, 7):
+            safe_edit_message(call, f"{head}\n\n{arrows[:shown]}…\n\n{_plinko_slots_line()}", parse_mode="HTML")
+            time.sleep(0.5)
+        if win:
+            _chat_pay(user.id, win)
+        result = "wins" if win > bet else "draws" if win == bet else "losses"
+        balance = _record_luck_round(user, "plinko", result, f"pbet_{short_id()}", extra={"bet": bet, "x": multiplier})
+        profit = win - bet
+        outcome = (f"{_victory_emoji(user.id)} ×{multiplier:g} → +{profit} 🪙" if profit > 0
+                   else "😌 ×1 — ставка вернулась" if profit == 0
+                   else f"😅 ×{multiplier:g} → −{-profit} 🪙")
+        text = (f"{head}\n\n{arrows}\n\n{_plinko_slots_line(slot)}\n\n{outcome}\n"
+                f"💰 Баланс {name}: {balance} 🪙")
+        safe_edit_message(call, text, reply_markup=plinko_bet_kb(again=True), parse_mode="HTML")
+    except Exception as e:
+        log_exception("plinko_bet", e, user_id=user.id)
+        try:
+            bot.answer_callback_query(call.id, "Шарик застрял — попробуйте ещё раз")
+        except Exception:
+            pass
+
+
+# ----------------------------------- синтез -----------------------------------
+
+SYNTH_CHAT_MULTIPLIERS = (1.5, 2, 5, 10, 50)
+SYNTH_INTRO = (
+    "🌀 Синтез\n\n"
+    "Колесо с выигрышным сектором: чем больше множитель, тем сектор уже. "
+    "Шанс ×2 — 47,5%, ×10 — 9,5%, ×50 — 1,9%. Выберите множитель и ставку, крутит тот, кто нажал."
+)
+
+
+def synth_bet_kb():
+    kb = types.InlineKeyboardMarkup()
+    for m in SYNTH_CHAT_MULTIPLIERS:
+        kb.row(*[types.InlineKeyboardButton(f"×{m:g} · {bet}", callback_data=f"snt_{m:g}_{bet}") for bet in CHAT_BETS])
+    return kb
+
+
+def _synth_wheel(chance, angle=None):
+    """Колесо из 12 делений: зелёные — сектор выигрыша, 🎯 — где встала стрелка."""
+    cells = ["🟩" if (i + 0.5) / 12 < chance or i == 0 else "⬜" for i in range(12)]
+    if angle is not None:
+        cells[min(11, int(angle / 30))] = "🎯"
+    return "".join(cells)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("snt_"))
+def synth_bet_callback(call):
+    user = call.from_user
+    if _deny_if_spam(user.id, call_id=call.id, action="luck"):
+        return
+    try:
+        _, raw_mult, raw_bet = call.data.split("_")
+        multiplier = float(raw_mult)
+        multiplier = int(multiplier) if multiplier.is_integer() else multiplier
+        bet = _parse_bet(raw_bet)
+        if bet is None or multiplier not in SYNTH_CHAT_MULTIPLIERS:
+            bot.answer_callback_query(call.id)
+            return
+        if _deny_new_round(call):
+            return
+        with _chat_casino_lock:
+            ok, balance = _chat_take_bet(user.id, bet)
+        if not ok:
+            _no_coins_alert(call, balance, bet)
+            return
+        bot.answer_callback_query(call.id, f"Синтез ×{multiplier:g} на {bet} 🪙!")
+        name = _player_name(user)
+        angle, chance, win = casino.synth_spin(bet, multiplier)
+        head = f"🌀 {name} ставит {bet} 🪙 на ×{multiplier:g} (шанс {chance * 100:.1f}%)"
+        for frame in range(2):
+            safe_edit_message(call, f"{head}\n\n{_synth_wheel(chance, random.random() * 360)}\nКолесо крутится…")
+            time.sleep(0.6)
+        if win:
+            _chat_pay(user.id, win)
+        result = "wins" if win else "losses"
+        balance = _record_luck_round(user, "synth", result, f"snt_{short_id()}", extra={"bet": bet, "x": multiplier})
+        outcome = (f"{_victory_emoji(user.id)} Попали в сектор! +{win - bet} 🪙" if win
+                   else f"😅 Мимо сектора — −{bet} 🪙")
+        text = f"{head}\n\n{_synth_wheel(chance, angle)}\n{outcome}\n💰 Баланс {name}: {balance} 🪙"
+        safe_edit_message(call, text, reply_markup=synth_bet_kb())
+    except Exception as e:
+        log_exception("synth_bet", e, user_id=user.id)
+        try:
+            bot.answer_callback_query(call.id, "Колесо заело — попробуйте ещё раз")
+        except Exception:
+            pass
+
+
+# ----------------------------------- ракетка -----------------------------------
+# Сообщение с ракетой правит отдельный поток раз в ROCKET_CHAT_TICK секунд.
+# Когда взорвётся, знает только сервер; «Забрать» считается по его часам.
+ROCKET_CHAT_TICK = 1.5
+ROCKET_INTRO = (
+    "🚀 Ракетка\n\n"
+    "Множитель растёт, пока ракета летит. Нажмите «Забрать» до взрыва — получите ставку × множитель. "
+    "Не успели — ставка сгорает. Запускает и забирает тот, кто нажал."
+)
+chat_rockets = BoundedGames(previews=False)
+
+
+def rocket_bet_kb(again=False):
+    kb = types.InlineKeyboardMarkup()
+    label = "🔁 Ещё · " if again else "🚀 Запустить · "
+    kb.row(*[types.InlineKeyboardButton(f"{label}{bet}", callback_data=f"rkt_s_{bet}") for bet in CHAT_BETS])
+    return kb
+
+
+def _rocket_text(rocket, now):
+    head = f"🚀 {rocket['name']} запускает ракету на {rocket['bet']} 🪙"
+    if rocket.get("cashed"):
+        x = rocket["cashed"]
+        return (f"{head}\n\n💰 Забрали на ×{x:.2f}: +{rocket['win'] - rocket['bet']} 🪙\n"
+                f"Ракета взорвалась бы на ×{rocket['crash']:.2f}\n💰 Баланс: {rocket['balance']} 🪙")
+    if rocket.get("crashed"):
+        return (f"{head}\n\n💥 Взрыв на ×{rocket['crash']:.2f} — ставка сгорела\n"
+                f"💰 Баланс: {rocket['balance']} 🪙")
+    trail = "·" * min(12, int((now - 1) * 6)) + "🚀"
+    return f"{head}\n\n{trail}\n×{now:.2f} · забрать сейчас: {int(rocket['bet'] * now)} 🪙"
+
+
+def _rocket_flight_kb(rid, rocket, now):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(f"💰 Забрать · {int(rocket['bet'] * now)} 🪙", callback_data=f"rkt_c_{rid}"))
+    return kb
+
+
+def _rocket_edit(rocket, text, kb):
+    try:
+        if rocket.get("inline_id"):
+            bot.edit_message_text(text, inline_message_id=rocket["inline_id"], reply_markup=kb)
+        else:
+            bot.edit_message_text(text, chat_id=rocket["chat_id"], message_id=rocket["message_id"], reply_markup=kb)
+    except Exception as e:
+        if not _is_unchanged_message_error(e) and "Too Many Requests" not in str(e):
+            log_exception("rocket_edit", e)
+
+
+def _rocket_finish(rid, rocket, user, result, win, extra):
+    """Под _chat_casino_lock: раунд закончен один раз — выплата и запись в статистику."""
+    rocket["done"] = True
+    if win:
+        _chat_pay(rocket["uid"], win)
+    rocket["win"] = win
+    rocket["balance"] = _record_luck_round(user, "rocket", result, f"rkt_{rid}", extra=extra)
+    chat_rockets.pop(rid, None)
+
+
+def _rocket_fly(rid, rocket, user):
+    while not _shutdown_event.wait(ROCKET_CHAT_TICK):
+        with _chat_casino_lock:
+            if rocket.get("done"):
+                return
+            now = casino.rocket_multiplier(time.monotonic() - rocket["started"])
+            crashed = now >= rocket["crash"]
+            if crashed:
+                rocket["crashed"] = True
+                _rocket_finish(rid, rocket, user, "losses", 0, {"bet": rocket["bet"], "x": rocket["crash"]})
+        if crashed:
+            _rocket_edit(rocket, _rocket_text(rocket, now), rocket_bet_kb(again=True))
+            return
+        _rocket_edit(rocket, _rocket_text(rocket, now), _rocket_flight_kb(rid, rocket, now))
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rkt_"))
+def rocket_callback(call):
+    user = call.from_user
+    try:
+        _, op, arg = call.data.split("_", 2)
+        if op == "s":
+            if _deny_if_spam(user.id, call_id=call.id, action="luck") or _deny_new_round(call):
+                return
+            bet = _parse_bet(arg)
+            if bet is None:
+                bot.answer_callback_query(call.id)
+                return
+            if not call.inline_message_id and not call.message:
+                bot.answer_callback_query(call.id)
+                return
+            where = (call.inline_message_id, call.message and (call.message.chat.id, call.message.message_id))
+            with _chat_casino_lock:
+                flying = list(chat_rockets.values())
+                if any(r["uid"] == user.id for r in flying):
+                    bot.answer_callback_query(call.id, "Ваша ракета ещё летит", show_alert=True)
+                    return
+                if any(r["where"] == where for r in flying):
+                    bot.answer_callback_query(call.id, "С этого сообщения ракета уже летит — дождитесь конца полёта")
+                    return
+                ok, balance = _chat_take_bet(user.id, bet)
+                if not ok:
+                    _no_coins_alert(call, balance, bet)
+                    return
+                rid = short_id()
+                rocket = chat_rockets[rid] = {
+                    "uid": user.id, "name": _player_name(user), "bet": bet,
+                    "crash": casino.rocket_crash_point(), "started": time.monotonic(),
+                    "inline_id": call.inline_message_id, "where": where,
+                    "chat_id": call.message.chat.id if call.message else None,
+                    "message_id": call.message.message_id if call.message else None,
+                }
+            bot.answer_callback_query(call.id, f"Старт! Ставка {bet} 🪙")
+            _rocket_edit(rocket, _rocket_text(rocket, 1.0), _rocket_flight_kb(rid, rocket, 1.0))
+            threading.Thread(target=_rocket_fly, args=(rid, rocket, user), daemon=True, name="rocket").start()
+            return
+        rocket = chat_rockets.get(arg)
+        if op != "c" or not rocket:
+            bot.answer_callback_query(call.id, "Этот полёт уже закончился")
+            return
+        if rocket["uid"] != user.id:
+            bot.answer_callback_query(call.id, "Забрать может только тот, кто запустил ракету")
+            return
+        with _chat_casino_lock:
+            if rocket.get("done"):
+                bot.answer_callback_query(call.id, "Этот полёт уже закончился")
+                return
+            now = casino.rocket_multiplier(time.monotonic() - rocket["started"])
+            if now >= rocket["crash"]:
+                rocket["crashed"] = True
+                _rocket_finish(arg, rocket, user, "losses", 0, {"bet": rocket["bet"], "x": rocket["crash"]})
+            else:
+                rocket["cashed"] = now
+                win = int(rocket["bet"] * now)
+                _rocket_finish(arg, rocket, user, "wins" if win > rocket["bet"] else "draws", win,
+                               {"bet": rocket["bet"], "x": now})
+        bot.answer_callback_query(call.id, f"Забрали на ×{now:.2f}" if rocket.get("cashed") else "Не успели — взрыв!")
+        _rocket_edit(rocket, _rocket_text(rocket, now), rocket_bet_kb(again=True))
+    except Exception as e:
+        log_exception("rocket_chat", e, user_id=user.id)
+        try:
+            bot.answer_callback_query(call.id, "Ракета сбилась с курса — попробуйте ещё раз")
         except Exception:
             pass
 
