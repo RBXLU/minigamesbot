@@ -521,6 +521,11 @@ WHATS_NEW_RELEASES = {
             "и титул «Ветеран 1-го сезона». /pass",
             "🏠 Новое главное меню: прогресс, события и всё важное в одной карточке.",
             "🎃 Спасибо всем охотникам «Ночи тыкв» — итоговый топ в /event.",
+            "🚀 Новые игры на удачу: плинко, синтез, ракетка и русская рулетка — в Mini App, в чате и в инлайне. "
+            "В Mini App ещё и башня.",
+            "🎮 Игры прямо в сообщении: слоты, орёл и решка и башня без Mini App. /widgets",
+            "🏆 Каждый понедельник топ-3 недели в играх с рекордами получает 300, 200 и 100 монет.",
+            "🚢 Новый морской бой, слоты-автомат, честный пинг-понг и настройки Mini App: звук, язык, вид.",
         ],
         "en": [
             "🎂 We're 1 year old! Until Nov 19 claim your gift — 300 coins and the “1 year” frame: "
@@ -531,6 +536,11 @@ WHATS_NEW_RELEASES = {
             "and the Season 1 Veteran title. /pass",
             "🏠 New main menu: progress, events and everything important in one card.",
             "🎃 Thanks to every Pumpkin Night hunter — final leaderboard in /event.",
+            "🚀 New luck games: Plinko, Synthesis, Rocket and Russian Roulette — in the Mini App, in chat and inline. "
+            "Plus Tower in the Mini App.",
+            "🎮 Games right inside a message: slots, heads or tails and Tower, no Mini App needed. /widgets",
+            "🏆 Every Monday the weekly top 3 in record games get 300, 200 and 100 coins.",
+            "🚢 A new Battleship, real slot reels, fair ping-pong and Mini App settings: sound, language, look.",
         ],
         "uk": [
             "🎂 Нам 1 рік! До 19 листопада заберіть подарунок — 300 монет і рамку «1 рік»: "
@@ -541,6 +551,11 @@ WHATS_NEW_RELEASES = {
             "і титул «Ветеран 1-го сезону». /pass",
             "🏠 Нове головне меню: прогрес, події та все важливе в одній картці.",
             "🎃 Дякуємо всім мисливцям «Ночі гарбузів» — підсумковий топ в /event.",
+            "🚀 Нові ігри на удачу: плінко, синтез, ракетка й російська рулетка — у Mini App, у чаті та в інлайні. "
+            "У Mini App ще й вежа.",
+            "🎮 Ігри просто в повідомленні: слоти, орел і решка та вежа без Mini App. /widgets",
+            "🏆 Щопонеділка топ-3 тижня в іграх з рекордами отримує 300, 200 і 100 монет.",
+            "🚢 Новий морський бій, слоти-автомат, чесний пінг-понг і налаштування Mini App: звук, мова, вигляд.",
         ],
     },
 }
@@ -15351,6 +15366,8 @@ def _webapp_records(uid, tg_user, payload):
 # получают монеты. Счёт присылает клиент, поэтому призы скромные, а сам счёт
 # по-прежнему проходит проверку на правдоподобие (_parse_score).
 WEEKLY_PRIZES = (300, 200, 100)
+# Недели до запуска наград не платим: старый код при смене недели затирал её результаты
+WEEKLY_PRIZES_FROM = os.getenv("WEEKLY_PRIZES_FROM", "2026-W46")
 
 
 def _week_scores(rec, week_id):
@@ -15363,7 +15380,7 @@ def _week_scores(rec, week_id):
 
 def _pay_weekly_prizes():
     week_id = _week_id(date.today() - timedelta(days=7))
-    if _pay_weekly_prizes.done == week_id:
+    if _pay_weekly_prizes.done == week_id or week_id < WEEKLY_PRIZES_FROM:
         return
     if (read_state_key("weekly_prizes", {}, db_path=DB_FILE) or {}).get("paid") == week_id:
         _pay_weekly_prizes.done = week_id
